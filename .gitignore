@@ -1,2 +1,7 @@
 projects/
 results/
+output/
+target/
+*.swp
+**/*.rs.bk
+*.log

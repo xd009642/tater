@@ -1,0 +1,1006 @@
+{
+  "toolchain": "+nightly",
+  "target": null,
+  "crates": [
+    {
+      "repository_url": "https://github.com/chronotope/chrono",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/tokio-rs/tokio",
+      "args": ["--all-features"],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-analyzer/rust-analyzer",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/tock/tock",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/tikv/tikv",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-lang/libc",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-lang/rustfmt",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/alacritty/alacritty",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/servo/webrender",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/paritytech/substrate",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/solana-labs/solana",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/actix/actix-web",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/bytecodealliance/wasmtime",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/hyperium/hyper",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/wasmerio/wasmer",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/habitat-sh/habitat",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/serde-rs/serde",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/sfackler/rust-openssl",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-lang/rustup",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/clap-rs/clap",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/PyO3/pyo3",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/blockstack/stacks-blockchain",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/serde-rs/json",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/timberio/vector",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/sharkdp/bat",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-random/rand",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/starship/starship",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/nix-rust/nix",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/diesel-rs/diesel",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/image-rs/image",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/amethyst/amethyst",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/uutils/coreutils",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/eqrion/cbindgen",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/servo/core-foundation-rs",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/firecracker-microvm/firecracker",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rustwasm/wasm-bindgen",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-lang/futures-rs",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/gfx-rs/gfx",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/seanmonstar/reqwest",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/paritytech/polkadot",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/BurntSushi/ripgrep",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/servo/rust-url",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-lang/regex",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/SergioBenitez/Rocket",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/nushell/nushell",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/gleam-lang/gleam",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-lang/miri",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/diem/diem",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/time-rs/time",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/dtolnay/syn",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/greshake/i3status-rust",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/bluejekyll/trust-dns",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/tree-sitter/tree-sitter",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-lang/git2-rs",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/alexcrichton/cc-rs",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/mozilla/sccache",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/gfx-rs/wgpu",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/meilisearch/MeiliSearch",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-lang/rustlings",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/tokio-rs/tracing",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/MaterializeInc/materialize",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/hyperledger/indy-sdk",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/bevyengine/bevy",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/shadowsocks/shadowsocks-rust",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/launchbadge/sqlx",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/nervosnetwork/ckb",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/cloudflare/wrangler",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/mimblewimble/grin",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/XAMPPRocky/tokei",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/hermitcore/libhermit-rs",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/sigp/lighthouse",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/sfackler/rust-postgres",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rayon-rs/rayon",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/crossbeam-rs/crossbeam",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/input-output-hk/jormungandr",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/sagiegurari/cargo-make",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/mozilla/application-services",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/swc-project/swc",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/servo/rust-smallvec",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/autozimu/LanguageClient-neovim",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/jonathandturner/rhai",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-lang/backtrace-rs",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/Amanieu/parking_lot",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rusoto/rusoto",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/actix/actix-net",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/wez/wezterm",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/Geal/nom",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-bitcoin/rust-bitcoin",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/clux/kube-rs",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/dimforge/nalgebra",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/actix/actix",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-itertools/itertools",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/servo/rust-mozjs",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/yewstack/yew",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/graphql-rust/juniper",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/getzola/zola",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/mitsuhiko/redis-rs",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/Canop/broot",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/http-rs/tide",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/getsentry/sentry-cli",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/spacejam/sled",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/georust/geo",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/TeXitoi/structopt",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/dandavison/delta",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/probe-rs/probe-rs",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/ruffle-rs/ruffle",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/exercism/rust",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/lu-zero/cargo-c",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-embedded/cortex-m",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-osdev/x86_64",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-lang/hashbrown",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/linkerd/linkerd2-proxy",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/filecoin-project/rust-fil-proofs",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/glium/glium",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/racer-rust/racer",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/comit-network/comit-rs",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/servo/rust-cssparser",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/actix/actix-extras",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/sharkdp/fd",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-lang/log",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/LemmyNet/lemmy",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/deltachat/deltachat-core-rust",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/libp2p/rust-libp2p",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/GNOME/librsvg",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/bytecodealliance/wasm-tools",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/graphprotocol/graph-node",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/imazen/imageflow",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/seanmonstar/warp",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/ogham/exa",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/huggingface/tokenizers",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/veloren/veloren",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-lang/rls",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/RustPython/RustPython",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/tensorflow/rust",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/redox-os/orbtk",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/serenity-rs/serenity",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/matter-labs/zksync",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/kkawakam/rustyline",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/servo/html5ever",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-lang/compiler-builtins",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/sdroege/gstreamer-rs",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/sunng87/handlebars-rust",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/Spotifyd/spotifyd",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/tokio-rs/mio",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/stepancheg/rust-protobuf",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/BurntSushi/quickcheck",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/cloud-hypervisor/cloud-hypervisor",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-lang/chalk",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/denisidoro/navi",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-num/num",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/async-graphql/async-graphql",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/Rust-SDL2/rust-sdl2",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/RustCrypto/traits",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/raphlinus/pulldown-cmark",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/capnproto/capnproto-rust",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/CleverCloud/lapin",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/uuid-rs/uuid",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/async-rs/async-std",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-num/num-traits",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/crossterm-rs/crossterm",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-num/num-bigint",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/ggez/ggez",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/alexcrichton/curl-rust",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/tantivy-search/tantivy",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/ctz/rustls",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/dabreegster/abstreet",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/vmware/differential-datalog",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/oreboot/oreboot",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-rocksdb/rust-rocksdb",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/tauri-apps/tauri",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/neon-bindings/neon",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/Rigellute/spotify-tui",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/alexcrichton/toml-rs",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/r-darwish/topgrade",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/env-logger-rs/env_logger",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-bio/rust-bio",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/openethereum/openethereum",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/gtk-rs/gir",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/Marwes/combine",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/alexcrichton/proc-macro2",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/djc/askama",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/PistonDevelopers/piston",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/hyperium/h2",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/boa-dev/boa",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/getsentry/relay",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/hrkfdn/ncspot",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/google/tarpc",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/prisma/prisma-engines",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/hyperium/http",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/BurntSushi/rust-csv",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/getsentry/sentry-rust",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/tokio-rs/bytes",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/MitMaro/git-interactive-rebase-tool",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/gimli-rs/gimli",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/HdrHistogram/HdrHistogram_rust",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/dtolnay/quote",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/hyperium/tonic",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-ndarray/ndarray",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/Lokathor/bytemuck",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-ml/linfa",
+      "args": [],
+      "env": {}
+    }
+  ]
+}

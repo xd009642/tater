@@ -5,7 +5,7 @@ use std::fs::{copy, create_dir, create_dir_all, read_dir, remove_dir_all, remove
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use structopt::StructOpt;
 use tracing::{error, info, warn};
@@ -152,7 +152,7 @@ fn run_tater(context: &Context, output: &Path, rx: mpsc::Receiver<()>) {
         if proj_dir.join(".git").exists() {
             warn!("Project already cloned, using existing version");
         } else {
-            let git = Command::new("git")
+            let git_hnd = Command::new("git")
                 .args(&[
                     "clone",
                     "--recurse-submodules",
@@ -162,12 +162,15 @@ fn run_tater(context: &Context, output: &Path, rx: mpsc::Receiver<()>) {
                     proj_name,
                 ])
                 .current_dir(&projects)
-                .output()
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("Unable to spawn process");
+            let git = git_hnd
+                .wait_with_output()
                 .expect("Git doesn't seem to be installed");
-
             if !git.status.success() {
                 error!("Git clone of {} failed", proj.repository_url);
-                continue;
             }
         }
         if rx.try_recv().is_ok() {
@@ -175,10 +178,13 @@ fn run_tater(context: &Context, output: &Path, rx: mpsc::Receiver<()>) {
             let progress_msg = "Unable to write progress file do it yourself";
             let mut f = File::create(&progress_file).expect(progress_msg);
             f.write_all(i.to_string().as_bytes()).expect(progress_msg);
-            if failures > 0 {
+            if failures > 0 && i > 0 {
                 error!("Tarpaulin failed on {}/{} projects", failures, i);
             }
             return;
+        }
+        if !proj_dir.exists() {
+            continue;
         }
         let mut args = vec![
             "tarpaulin".to_string(),
@@ -192,9 +198,14 @@ fn run_tater(context: &Context, output: &Path, rx: mpsc::Receiver<()>) {
             .current_dir(&proj_dir)
             .env("RUST_LOG", "cargo_tarpaulin=info")
             .envs(&proj.env)
-            .output()
-            .expect("cargo-tarpaulin doesn't seem to be installed");
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Unable to spawn process");
 
+        let tarp = tarp
+            .wait_with_output()
+            .expect("cargo tarpaulin doesn't seem to be installed");
         let proj_res = results.join(proj_name);
 
         let _ = create_dir(&proj_res);

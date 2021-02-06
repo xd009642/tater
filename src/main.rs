@@ -6,6 +6,7 @@ use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::mpsc;
 use structopt::StructOpt;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, Layer, Registry};
@@ -60,6 +61,7 @@ impl CrateSpec {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     setup_logging();
+    let ctrlc_events = ctrl_handler()?;
     let args = Args::from_args();
 
     if !args.repos.is_file() {
@@ -76,9 +78,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(file) = File::open(args.repos) {
         let reader = BufReader::new(file);
         let context: Context = serde_json::from_reader(reader).expect("Unable to parse repos json");
-        run_tater(&context, &args.output);
+        run_tater(&context, &args.output, ctrlc_events);
     }
     Ok(())
+}
+
+fn ctrl_handler() -> Result<mpsc::Receiver<()>, ctrlc::Error> {
+    let (sender, receiver) = mpsc::channel();
+    ctrlc::set_handler(move || {
+        let _e = sender.send(());
+    })?;
+    Ok(receiver)
 }
 
 fn setup_logging() {
@@ -91,18 +101,50 @@ fn setup_logging() {
     tracing::subscriber::set_global_default(subscriber).unwrap();
 }
 
-fn run_tater(context: &Context, output: &Path) {
+/// Returns the next crate to process for resuming a workflow
+fn get_progress(progress_file: &Path) -> std::io::Result<usize> {
+    if progress_file.is_file() {
+        let reader = BufReader::new(File::open(&progress_file)?);
+        if let Some(line) = reader.lines().next() {
+            let line = line?;
+            match line.trim().parse::<usize>() {
+                Ok(n) => Ok(n),
+                Err(_) => {
+                    warn!("Invalid progress file contents: {}", line);
+                    Ok(0)
+                }
+            }
+        } else {
+            Ok(0)
+        }
+    } else {
+        Ok(0)
+    }
+}
+
+fn run_tater(context: &Context, output: &Path, rx: mpsc::Receiver<()>) {
     info!("Processing {} projects", context.crates.len());
     let projects = output.join("projects");
     let results = output.join("results");
+    let progress_file = output.join("progress");
     if create_dir(&projects).is_err() {
         warn!("Projects directory already exists");
     }
     if create_dir(&results).is_err() {
         warn!("Results directory already exists");
     }
-
-    for (i, proj) in context.crates.iter().enumerate() {
+    let start_from = match get_progress(&progress_file) {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Invalid progress file: {}", e);
+            0
+        }
+    };
+    if start_from > 0 {
+        info!("Resuming execution from {}", start_from);
+    }
+    let mut failures = 0;
+    for (i, proj) in context.crates.iter().skip(start_from).enumerate() {
         // Clone project
         let proj_name = proj.name().unwrap_or_else(|| "unnamed_project");
         let proj_dir = projects.join(proj_name);
@@ -127,6 +169,16 @@ fn run_tater(context: &Context, output: &Path) {
                 error!("Git clone of {} failed", proj.repository_url);
                 continue;
             }
+        }
+        if rx.try_recv().is_ok() {
+            info!("Pausing execution");
+            let progress_msg = "Unable to write progress file do it yourself";
+            let mut f = File::create(&progress_file).expect(progress_msg);
+            f.write_all(i.to_string().as_bytes()).expect(progress_msg);
+            if failures > 0 {
+                error!("Tarpaulin failed on {}/{} projects", failures, i);
+            }
+            return;
         }
         let mut args = vec![
             "tarpaulin".to_string(),
@@ -175,7 +227,15 @@ fn run_tater(context: &Context, output: &Path) {
             info!("Removing {}", proj_dir.display());
             let _ = remove_dir_all(&proj_dir);
         } else {
+            failures += 1;
             error!("Tarpaulin failed on {}", proj_name);
         }
+    }
+    if failures > 0 {
+        error!(
+            "Tarpaulin failed on {}/{} projects",
+            failures,
+            context.crates.len()
+        );
     }
 }

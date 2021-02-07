@@ -157,7 +157,7 @@ fn run_tater(context: &Context, output: &Path, rx: mpsc::Receiver<()>) {
         info!("Resuming execution from {}", start_from);
     }
     let mut failures = 0;
-    for (i, proj) in context.crates.iter().skip(start_from).enumerate() {
+    for (i, proj) in context.crates.iter().enumerate().skip(start_from) {
         // Clone project
         let proj_name = proj.name().unwrap_or_else(|| "unnamed_project");
         let proj_dir = projects.join(proj_name);
@@ -184,6 +184,8 @@ fn run_tater(context: &Context, output: &Path, rx: mpsc::Receiver<()>) {
                 .expect("Git doesn't seem to be installed");
             if !git.status.success() {
                 error!("Git clone of {} failed", proj.repository_url);
+            } else {
+                info!("{} cloned successfully", proj_name);
             }
         }
         if should_exit(&progress_file, i, &rx) {

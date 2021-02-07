@@ -8,17 +8,7 @@
       "env": {}
     },
     {
-      "repository_url": "https://github.com/tokio-rs/tokio",
-      "args": ["--all-features"],
-      "env": {}
-    },
-    {
-      "repository_url": "https://github.com/rust-analyzer/rust-analyzer",
-      "args": [],
-      "env": {}
-    },
-    {
-      "repository_url": "https://github.com/tock/tock",
+      "repository_url": "https://github.com/openmls/openmls",
       "args": [],
       "env": {}
     },
@@ -324,7 +314,7 @@
     },
     {
       "repository_url": "https://github.com/launchbadge/sqlx",
-      "args": [],
+      "args": ["--features", "runtime-tokio-native-tls"],
       "env": {}
     },
     {

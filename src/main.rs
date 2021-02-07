@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
-use std::fs::{copy, create_dir, create_dir_all, read_dir, remove_dir_all, remove_file, File};
+use std::fs::{
+    copy, create_dir, create_dir_all, read_dir, remove_dir_all, remove_file, File, OpenOptions,
+};
 use std::io::prelude::*;
-use std::io::{BufReader, BufWriter};
+use std::io::{self, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -135,11 +137,22 @@ fn should_exit(progress_file: &Path, index: usize, rx: &mpsc::Receiver<()>) -> b
     }
 }
 
+fn get_status_linewriter(path: &Path, start_iter: usize) -> io::Result<BufWriter<File>> {
+    let file = if start_iter == 0 {
+        File::open(path)
+    } else {
+        OpenOptions::new().append(true).create(true).open(path)
+    }?;
+    Ok(BufWriter::new(file))
+}
+
 fn run_tater(context: &Context, output: &Path, rx: mpsc::Receiver<()>) {
     info!("Processing {} projects", context.crates.len());
     let projects = output.join("projects");
     let results = output.join("results");
     let progress_file = output.join("progress");
+    let pass_file = output.join("pass");
+    let fail_file = output.join("fail");
     if create_dir(&projects).is_err() {
         warn!("Projects directory already exists");
     }
@@ -156,6 +169,8 @@ fn run_tater(context: &Context, output: &Path, rx: mpsc::Receiver<()>) {
     if start_from > 0 {
         info!("Resuming execution from {}", start_from);
     }
+    let mut fail_writer = get_status_linewriter(&fail_file, start_from).unwrap();
+    let mut pass_writer = get_status_linewriter(&pass_file, start_from).unwrap();
     let mut failures = 0;
     for (i, proj) in context.crates.iter().enumerate().skip(start_from) {
         // Clone project
@@ -245,10 +260,14 @@ fn run_tater(context: &Context, output: &Path, rx: mpsc::Receiver<()>) {
         let exit_index = if tarp.status.success() && found_log {
             info!("Removing {}", proj_dir.display());
             let _ = remove_dir_all(&proj_dir);
+            let _ = pass_writer.write_all(proj_name.as_bytes());
+            let _ = pass_writer.write_all(b"\n");
             i + 1
         } else {
             failures += 1;
             error!("Tarpaulin failed on {}", proj_name);
+            let _ = fail_writer.write_all(proj_name.as_bytes());
+            let _ = fail_writer.write_all(b"\n");
             i
         };
         if should_exit(&progress_file, exit_index, &rx) {

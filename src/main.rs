@@ -145,7 +145,7 @@ fn should_exit(progress_file: &Path, index: usize, rx: &mpsc::Receiver<()>) -> b
 
 fn get_status_linewriter(path: &Path, start_iter: usize) -> io::Result<BufWriter<File>> {
     let file = if start_iter == 0 {
-        File::open(path)
+        File::create(path)
     } else {
         OpenOptions::new().append(true).create(true).open(path)
     }?;
@@ -280,12 +280,14 @@ fn run_tater(context: &Context, output: &Path, jobs: Option<usize>, rx: mpsc::Re
             let _ = remove_dir_all(&proj_dir);
             let _ = pass_writer.write_all(proj_name.as_bytes());
             let _ = pass_writer.write_all(b"\n");
+            let _ = pass_writer.flush();
             i + 1
         } else {
             failures += 1;
             error!("Tarpaulin failed on {}", proj_name);
             let _ = fail_writer.write_all(proj_name.as_bytes());
             let _ = fail_writer.write_all(b"\n");
+            let _ = fail_writer.flush();
             i
         };
         if should_exit(&progress_file, exit_index, &rx) {

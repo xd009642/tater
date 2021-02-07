@@ -34,8 +34,8 @@ struct Args {
     output: PathBuf,
     /// Limit the number of jobs, this will limit cargo build jobs and also the number of test
     /// threads TODO
-    #[structopt(name = "jobs", short = "j", long = "jobs", default_value = "8")]
-    jobs: usize,
+    #[structopt(name = "jobs", short = "j", long = "jobs")]
+    jobs: Option<usize>,
 }
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -43,6 +43,12 @@ struct Context {
     toolchain: String,
     target: Option<String>,
     crates: Vec<CrateSpec>,
+    /// Args to be passed to every tarpaulin evocation
+    #[serde(default)]
+    args: Vec<String>,
+    /// Env vars for every tarpaulin evocation
+    #[serde(default)]
+    env: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -80,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(file) = File::open(args.repos) {
         let reader = BufReader::new(file);
         let context: Context = serde_json::from_reader(reader).expect("Unable to parse repos json");
-        run_tater(&context, &args.output, ctrlc_events);
+        run_tater(&context, &args.output, args.jobs, ctrlc_events);
     }
     Ok(())
 }
@@ -146,7 +152,7 @@ fn get_status_linewriter(path: &Path, start_iter: usize) -> io::Result<BufWriter
     Ok(BufWriter::new(file))
 }
 
-fn run_tater(context: &Context, output: &Path, rx: mpsc::Receiver<()>) {
+fn run_tater(context: &Context, output: &Path, jobs: Option<usize>, rx: mpsc::Receiver<()>) {
     info!("Processing {} projects", context.crates.len());
     let projects = output.join("projects");
     let results = output.join("results");
@@ -215,12 +221,24 @@ fn run_tater(context: &Context, output: &Path, rx: mpsc::Receiver<()>) {
             "--color".to_string(),
             "never".to_string(),
         ];
+        args.extend_from_slice(&context.args);
         args.extend_from_slice(&proj.args);
+        if let Some(nj) = jobs {
+            args.extend_from_slice(&[
+                "--jobs".to_string(),
+                nj.to_string(),
+                "--".to_string(),
+                "--test-threads".to_string(),
+                nj.to_string(),
+            ]);
+        }
+
         let tarp = Command::new("cargo")
             .args(&args)
             .current_dir(&proj_dir)
             .env("RUST_LOG", "cargo_tarpaulin=info")
             .envs(&proj.env)
+            .envs(&context.env)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

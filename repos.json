@@ -1,6 +1,8 @@
 {
   "toolchain": "+nightly",
   "target": null,
+  "args": [],
+  "env": {},
   "crates": [
     {
       "repository_url": "https://github.com/chronotope/chrono",
@@ -334,11 +336,6 @@
     },
     {
       "repository_url": "https://github.com/XAMPPRocky/tokei",
-      "args": [],
-      "env": {}
-    },
-    {
-      "repository_url": "https://github.com/hermitcore/libhermit-rs",
       "args": [],
       "env": {}
     },

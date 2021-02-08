@@ -285,13 +285,17 @@ fn run_tater(context: &Context, output: &Path, jobs: Option<usize>, rx: mpsc::Re
         } else {
             failures += 1;
             error!("Tarpaulin failed on {}", proj_name);
-            let _ = fail_writer.write_all(proj_name.as_bytes());
-            let _ = fail_writer.write_all(b"\n");
-            let _ = fail_writer.flush();
             i
         };
         if should_exit(&progress_file, exit_index, &rx) {
+            let _ = fail_writer.write_all(proj_name.as_bytes());
+            let _ = fail_writer.write_all(b"\n");
+            let _ = fail_writer.flush();
             return;
+        } else if i == exit_index {
+            let _ = fail_writer.write_all(proj_name.as_bytes());
+            let _ = fail_writer.write_all(b"\n");
+            let _ = fail_writer.flush();
         }
     }
     if failures > 0 {

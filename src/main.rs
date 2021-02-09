@@ -59,6 +59,13 @@ struct CrateSpec {
     args: Vec<String>,
     #[serde(default)]
     env: HashMap<String, String>,
+    /// For anything that requires something like another server to be up and running 
+    /// This is going to be executed like `sh -c CrateSpec::setup` so not great but :shrug:
+    #[serde(default)]
+    setup: Option<String>,
+    /// To tear down any addition things that need running.
+    #[serde(default)]
+    teardown: Option<String>
 }
 
 impl CrateSpec {
@@ -215,6 +222,15 @@ fn run_tater(context: &Context, output: &Path, jobs: Option<usize>, rx: mpsc::Re
         if !proj_dir.exists() {
             continue;
         }
+        if let Some(setup) = proj.setup.as_ref() {
+            let res = Command::new("sh")
+                .args(&["-c", setup])
+                .output();
+            if res.is_err() {
+                error!("setup failed for {}", proj_name);
+                continue;
+            }
+        }
         let mut args = vec![
             "tarpaulin".to_string(),
             "--debug".to_string(),
@@ -247,6 +263,14 @@ fn run_tater(context: &Context, output: &Path, jobs: Option<usize>, rx: mpsc::Re
         let tarp = tarp
             .wait_with_output()
             .expect("cargo tarpaulin doesn't seem to be installed");
+        if let Some(setup) = proj.teardown.as_ref() {
+            let res = Command::new("sh")
+                .args(&["-c", setup])
+                .output();
+            if res.is_err() {
+                warn!("teardown failed for {}", proj_name);
+            }
+        }
         let proj_res = results.join(proj_name);
 
         let _ = create_dir(&proj_res);

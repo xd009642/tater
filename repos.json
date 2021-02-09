@@ -35,16 +35,6 @@
       "env": {}
     },
     {
-      "repository_url": "https://github.com/servo/webrender",
-      "args": [],
-      "env": {}
-    },
-    {
-      "repository_url": "https://github.com/paritytech/substrate",
-      "args": [],
-      "env": {}
-    },
-    {
       "repository_url": "https://github.com/solana-labs/solana",
       "args": [],
       "env": {}
@@ -130,11 +120,6 @@
       "env": {}
     },
     {
-      "repository_url": "https://github.com/nix-rust/nix",
-      "args": [],
-      "env": {}
-    },
-    {
       "repository_url": "https://github.com/diesel-rs/diesel",
       "args": [],
       "env": {}
@@ -176,7 +161,7 @@
     },
     {
       "repository_url": "https://github.com/rust-lang/futures-rs",
-      "args": [],
+      "args": ["--all-features", "--workspace"],
       "env": {}
     },
     {
@@ -241,7 +226,7 @@
     },
     {
       "repository_url": "https://github.com/dtolnay/syn",
-      "args": [],
+      "args": ["--all-features", "--release"],
       "env": {}
     },
     {
@@ -306,7 +291,7 @@
     },
     {
       "repository_url": "https://github.com/bevyengine/bevy",
-      "args": [],
+      "args": ["--workspace"],
       "env": {}
     },
     {
@@ -436,7 +421,7 @@
     },
     {
       "repository_url": "https://github.com/dimforge/nalgebra",
-      "args": [],
+      "args": ["--features", "debug compare"],
       "env": {}
     },
     {
@@ -925,6 +910,8 @@
       "env": {}
     },
     {
+      "setup": "direnv all && make all-dbs",
+      "teardown": "docker-compose kill",
       "repository_url": "https://github.com/prisma/prisma-engines",
       "args": [],
       "env": {}

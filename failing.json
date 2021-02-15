@@ -1,0 +1,32 @@
+{
+  "toolchain": "+nightly",
+  "target": null,
+  "crates": [
+    {
+      "repository_url": "https://github.com/tokio-rs/tokio",
+      "args": ["--all-features"],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/solana-labs/solana",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-analyzer/rust-analyzer",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/hermitcore/libhermit-rs",
+      "comment": "it's an OS tests ran via a python runner and QEMU and has a custom target in .cargo/config for it's kernel",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/tock/tock",
+      "args": [],
+      "env": {}
+    }
+}
+

@@ -35,11 +35,6 @@
       "env": {}
     },
     {
-      "repository_url": "https://github.com/solana-labs/solana",
-      "args": [],
-      "env": {}
-    },
-    {
       "repository_url": "https://github.com/actix/actix-web",
       "args": [],
       "env": {}
@@ -515,11 +510,6 @@
       "env": {}
     },
     {
-      "repository_url": "https://github.com/rust-embedded/cortex-m",
-      "args": [],
-      "env": {}
-    },
-    {
       "repository_url": "https://github.com/rust-osdev/x86_64",
       "args": [],
       "env": {}
@@ -973,6 +963,11 @@
     },
     {
       "repository_url": "https://github.com/rust-ml/linfa",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/jonhoo/msql-srv",
       "args": [],
       "env": {}
     }

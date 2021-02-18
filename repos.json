@@ -970,6 +970,51 @@
       "repository_url": "https://github.com/jonhoo/msql-srv",
       "args": [],
       "env": {}
+    },
+    {
+      "repository_url": "https://github.com/czbiohub/bcl2fastr",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/simd-lite/simd-json",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/fadeevab/cocoon",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rust-git/rsgit",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://gitlab.com/veloren/veloren.git",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://gitlab.com/df_storyteller/df-storyteller",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/rubik/lobster",
+      "args": [],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/wasm-lsp/wasm-language-server",
+      "args": ["--rest", "'--features wasm-language-server/corpus --features wasm-language-server-parsers/corpus'"],
+      "env": {}
+    },
+    {
+      "repository_url": "https://github.com/jonhoo/faktory",
+      "args": [],
+      "env": {}
     }
   ]
 }

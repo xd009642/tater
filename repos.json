@@ -25,11 +25,6 @@
       "env": {}
     },
     {
-      "repository_url": "https://github.com/rust-lang/rustfmt",
-      "args": [],
-      "env": {}
-    },
-    {
       "repository_url": "https://github.com/alacritty/alacritty",
       "args": [],
       "env": {}
@@ -121,7 +116,7 @@
     },
     {
       "repository_url": "https://github.com/image-rs/image",
-      "args": [],
+      "args": ["--lib"],
       "env": {}
     },
     {
@@ -205,11 +200,6 @@
       "env": {}
     },
     {
-      "repository_url": "https://github.com/rust-lang/miri",
-      "args": [],
-      "env": {}
-    },
-    {
       "repository_url": "https://github.com/diem/diem",
       "args": [],
       "env": {}
@@ -231,7 +221,7 @@
     },
     {
       "repository_url": "https://github.com/bluejekyll/trust-dns",
-      "args": [],
+      "args": ["--all-features"],
       "env": {}
     },
     {

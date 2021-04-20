@@ -243,9 +243,6 @@ fn run_tater(context: &Context, output: &Path, jobs: Option<usize>, rx: mpsc::Re
             args.extend_from_slice(&[
                 "--jobs".to_string(),
                 nj.to_string(),
-                "--".to_string(),
-                "--test-threads".to_string(),
-                nj.to_string(),
             ]);
         }
 

@@ -268,6 +268,7 @@ fn run_tater(context: &Context, output: &Path, jobs: Option<usize>, rx: mpsc::Re
                 warn!("teardown failed for {}", proj_name);
             }
         }
+        let _ = remove_dir_all(proj_dir.join("target"));
         let proj_res = results.join(proj_name);
 
         let _ = create_dir(&proj_res);

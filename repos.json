@@ -15,11 +15,6 @@
       "env": {}
     },
     {
-      "repository_url": "https://github.com/tikv/tikv",
-      "args": [],
-      "env": {}
-    },
-    {
       "repository_url": "https://github.com/rust-lang/libc",
       "args": [],
       "env": {}
@@ -998,11 +993,12 @@
     },
     {
       "repository_url": "https://github.com/wasm-lsp/wasm-language-server",
-      "args": ["--rest", "'--features wasm-language-server/corpus --features wasm-language-server-parsers/corpus'"],
+      "args": ["--packages", "xtask", "wash-lsp-clu", "wasm-lsp-languages", "wasm-lsp-macros", 
+      "wasm-lsp-server", "wasm-lsp-syntax", "wasm-lsp-testing"],
       "env": {}
     },
     {
-      "repository_url": "https://github.com/jonhoo/faktory",
+      "repository_url": "https://github.com/jonhoo/faktory-rs",
       "args": [],
       "env": {}
     }

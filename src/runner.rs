@@ -1,0 +1,192 @@
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs::{
+    copy, create_dir, read_dir, remove_dir_all, remove_file, File,
+};
+use std::io::prelude::*;
+use std::io::{self, BufWriter};
+use std::path::Path;
+use std::process::{Command, Stdio};
+use thiserror::Error;
+use tracing::{error, info, warn};
+use url::Url;
+
+
+#[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Context {
+    pub toolchain: String,
+    pub target: Option<String>,
+    pub crates: Vec<CrateSpec>,
+    /// Args to be passed to every tarpaulin evocation
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Env vars for every tarpaulin evocation
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CrateSpec {
+    #[serde(with = "url_serde")]
+    pub repository_url: Url,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    /// For anything that requires something like another server to be up and running 
+    /// This is going to be executed like `sh -c CrateSpec::setup` so not great but :shrug:
+    #[serde(default)]
+    pub setup: Option<String>,
+    /// To tear down any addition things that need running.
+    #[serde(default)]
+    pub teardown: Option<String>
+}
+
+#[derive(Error, Debug)]
+pub enum RunError {
+    #[error("Issue cloning repo: {0}")]
+    Git(String),
+    #[error("Failed to run setup script: {0}")]
+    Setup(io::Error),
+}
+
+/// This is to make it easier to clean up the project after exiting from running the test with an
+/// error
+struct ProjectCleanupGuard<'a>(&'a Path);
+
+impl<'a> Drop for ProjectCleanupGuard<'a> {
+    fn drop(&mut self) {
+        let _ = remove_dir_all(self.0);
+    }
+}
+
+impl CrateSpec {
+    pub fn name(&self) -> Option<&str> {
+        self.repository_url.path().split('/').next_back()
+    }
+}
+
+fn clone_project(projects: impl AsRef<Path>, repository_url: &str, proj_name: &str) -> Result<(), String> {
+    let git_hnd = Command::new("git")
+        .args(&[
+            "clone",
+            "--recurse-submodules",
+            "--depth",
+            "1",
+            repository_url,
+            proj_name,
+        ])
+        .current_dir(projects)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn git {}", e))?;
+
+    let git = git_hnd
+        .wait_with_output()
+        .map_err(|e| format!("Git may not be installed: {}", e))?;
+
+    if !git.status.success() {
+        Err(format!("Git clone of {} failed", repository_url))
+    } else {
+        info!("{} cloned successfully", proj_name);
+        Ok(())
+    }
+}
+
+
+pub fn run_test(i: usize, context: &Context, proj: &CrateSpec, jobs: Option<&usize>, projects: &Path, results: &Path) -> Result<(), RunError> {
+    let proj_name = proj.name().unwrap_or_else(|| "unnamed_project");
+    let proj_dir = projects.join(proj_name);
+    info!("{}. {}/{}", proj_name, i + 1, context.crates.len());
+    if proj_dir.join(".git").exists() {
+        warn!("Project already cloned, using existing version");
+    } else {
+        clone_project(&projects, proj.repository_url.as_str(), proj_name)
+            .map_err(|e| RunError::Git(e))?
+    }
+
+    let _guard = ProjectCleanupGuard(&proj_dir);
+
+    if let Some(setup) = proj.setup.as_ref() {
+        let res = Command::new("sh")
+            .args(&["-c", setup])
+            .current_dir(&proj_dir)
+            .output();
+        if let Err(res) = res {
+            error!("setup failed for {}", proj_name);
+            return Err(RunError::Setup(res));
+        }
+    }
+
+    let mut args = vec![
+        "tarpaulin".to_string(),
+        "--debug".to_string(),
+        "--color".to_string(),
+        "never".to_string(),
+    ];
+    args.extend_from_slice(&context.args);
+    args.extend_from_slice(&proj.args);
+    if let Some(nj) = jobs {
+        args.extend_from_slice(&[
+            "--jobs".to_string(),
+            nj.to_string(),
+        ]);
+    }
+
+    let tarp = Command::new("cargo")
+        .args(&args)
+        .current_dir(&proj_dir)
+        .env("RUST_LOG", "cargo_tarpaulin=info")
+        .envs(&proj.env)
+        .envs(&context.env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Unable to spawn process");
+
+    let tarp = tarp
+        .wait_with_output()
+        .expect("cargo tarpaulin doesn't seem to be installed");
+
+
+    if let Some(teardown) = proj.teardown.as_ref() {
+        let res = Command::new("sh")
+            .args(&["-c", teardown])
+            .current_dir(&proj_dir)
+            .output();
+        if let Err(res) = res {
+            warn!("teardown failed for {}: {}", proj_name, res);
+        }
+    }
+    let _ = remove_dir_all(proj_dir.join("target"));
+    let proj_res = results.join(proj_name);
+
+    let _ = create_dir(&proj_res);
+    let mut writer =
+        BufWriter::new(File::create(proj_res.join(format!("{}.log", proj_name))).unwrap());
+    writer.write_all(b"stdout:\n").unwrap();
+    writer.write_all(&tarp.stdout).unwrap();
+    writer.write_all(b"\n\nstderr:\n").unwrap();
+    writer.write_all(&tarp.stderr).unwrap();
+
+    let mut found_log = false;
+    for entry in read_dir(&proj_dir).unwrap() {
+        let entry = entry.unwrap();
+        if let Some(name) = entry.path().file_name() {
+            if name.to_string_lossy().starts_with("tarpaulin-run") {
+                if copy(entry.path(), proj_res.join("tarpaulin-run.json")).is_ok() {
+                    let _ = remove_file(entry.path());
+                    found_log = true;
+                    break;
+                } else {
+                    warn!("Failed to copy log, still in project directory");
+                }
+            }
+        }
+    }
+    if !found_log {
+        warn!("Haven't found tarpaulin log file");
+    }
+    Ok(())
+}

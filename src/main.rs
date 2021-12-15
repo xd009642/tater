@@ -1,12 +1,9 @@
 use crate::runner::*;
 use std::env;
-use std::fs::{
-    copy, create_dir, create_dir_all, read_dir, remove_dir_all, remove_file, File, OpenOptions,
-};
+use std::fs::{create_dir, create_dir_all, File, OpenOptions};
 use std::io::prelude::*;
 use std::io::{self, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use structopt::StructOpt;
 use tracing::{error, info, warn};
@@ -152,9 +149,9 @@ fn run_tater(context: &Context, output: &Path, jobs: Option<usize>, rx: mpsc::Re
     for (i, proj) in context.crates.iter().enumerate().skip(start_from) {
         let proj_name = proj.name().unwrap_or_else(|| "unnamed_project");
         let res = run_test(i, context, proj, jobs.as_ref(), &projects, &results);
-        let exit_index = if res.is_err() {
+        let exit_index = if let Err(e) = res {
             failures += 1;
-            error!("Tarpaulin failed on {}", proj_name);
+            error!("Tarpaulin failed on {}: {:?}", proj_name, e);
             i
         } else {
             let _ = pass_writer.write_all(proj_name.as_bytes());

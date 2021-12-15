@@ -1,16 +1,16 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::{
-    copy, create_dir, read_dir, remove_dir_all, remove_file, File,
-};
+use std::fs::{copy, create_dir, read_dir, remove_dir_all, remove_file, File};
 use std::io::prelude::*;
 use std::io::{self, BufWriter};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
+use sysinfo::{ProcessExt, System, SystemExt};
 use thiserror::Error;
 use tracing::{error, info, warn};
 use url::Url;
-
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Context {
@@ -33,13 +33,13 @@ pub struct CrateSpec {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
-    /// For anything that requires something like another server to be up and running 
+    /// For anything that requires something like another server to be up and running
     /// This is going to be executed like `sh -c CrateSpec::setup` so not great but :shrug:
     #[serde(default)]
     pub setup: Option<String>,
     /// To tear down any addition things that need running.
     #[serde(default)]
-    pub teardown: Option<String>
+    pub teardown: Option<String>,
 }
 
 #[derive(Error, Debug)]
@@ -48,6 +48,12 @@ pub enum RunError {
     Git(String),
     #[error("Failed to run setup script: {0}")]
     Setup(io::Error),
+    #[error("Failed to run tarpaulin: {0}")]
+    Tarpaulin(String),
+    #[error("Tarpaulin seems to have stalled")]
+    Stalled,
+    #[error("Tarpaulin exited with a failure")]
+    Failed,
 }
 
 /// This is to make it easier to clean up the project after exiting from running the test with an
@@ -56,7 +62,7 @@ struct ProjectCleanupGuard<'a>(&'a Path);
 
 impl<'a> Drop for ProjectCleanupGuard<'a> {
     fn drop(&mut self) {
-        let _ = remove_dir_all(self.0);
+        let _ = remove_dir_all(self.0.join("target"));
     }
 }
 
@@ -66,7 +72,11 @@ impl CrateSpec {
     }
 }
 
-fn clone_project(projects: impl AsRef<Path>, repository_url: &str, proj_name: &str) -> Result<(), String> {
+fn clone_project(
+    projects: impl AsRef<Path>,
+    repository_url: &str,
+    proj_name: &str,
+) -> Result<(), String> {
     let git_hnd = Command::new("git")
         .args(&[
             "clone",
@@ -94,8 +104,14 @@ fn clone_project(projects: impl AsRef<Path>, repository_url: &str, proj_name: &s
     }
 }
 
-
-pub fn run_test(i: usize, context: &Context, proj: &CrateSpec, jobs: Option<&usize>, projects: &Path, results: &Path) -> Result<(), RunError> {
+pub fn run_test(
+    i: usize,
+    context: &Context,
+    proj: &CrateSpec,
+    jobs: Option<&usize>,
+    projects: &Path,
+    results: &Path,
+) -> Result<(), RunError> {
     let proj_name = proj.name().unwrap_or_else(|| "unnamed_project");
     let proj_dir = projects.join(proj_name);
     info!("{}. {}/{}", proj_name, i + 1, context.crates.len());
@@ -128,13 +144,10 @@ pub fn run_test(i: usize, context: &Context, proj: &CrateSpec, jobs: Option<&usi
     args.extend_from_slice(&context.args);
     args.extend_from_slice(&proj.args);
     if let Some(nj) = jobs {
-        args.extend_from_slice(&[
-            "--jobs".to_string(),
-            nj.to_string(),
-        ]);
+        args.extend_from_slice(&["--jobs".to_string(), nj.to_string()]);
     }
 
-    let tarp = Command::new("cargo")
+    let mut tarp = Command::new("cargo")
         .args(&args)
         .current_dir(&proj_dir)
         .env("RUST_LOG", "cargo_tarpaulin=info")
@@ -145,10 +158,54 @@ pub fn run_test(i: usize, context: &Context, proj: &CrateSpec, jobs: Option<&usi
         .spawn()
         .expect("Unable to spawn process");
 
-    let tarp = tarp
-        .wait_with_output()
-        .expect("cargo tarpaulin doesn't seem to be installed");
+    let system = System::default();
+    // I need to take the stdout and stderr and start writing them now instead...
+    let mut stdout = tarp.stdout.take().unwrap();
+    let mut stderr = tarp.stderr.take().unwrap();
 
+    let stdout_reading = thread::spawn(move || {
+        let mut output = vec![];
+        let _ = stdout.read_to_end(&mut output);
+        output
+    });
+
+    let stderr_reading = thread::spawn(move || {
+        let mut output = vec![];
+        let _ = stderr.read_to_end(&mut output);
+        output
+    });
+
+    let mut time_doing_nothing = 0;
+    let tarp = loop {
+        // We know tarpaulin won't be immediately done so lets just sleep at the start of the loop
+        thread::sleep(Duration::new(10, 0));
+        match tarp.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                // Check the CPU level
+                if let Some(proc) = system.process(tarp.id() as _) {
+                    if proc.cpu_usage() < 0.1 {
+                        time_doing_nothing += 1;
+                    } else {
+                        time_doing_nothing = 0;
+                    }
+
+                    // If we've sampled < 0.1% CPU utilisation for a minute we should just give up
+                    if time_doing_nothing > 5 {
+                        error!("Stalled, killing");
+                        let _ = tarp.kill();
+                        return Err(RunError::Stalled);
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(RunError::Tarpaulin(format!(
+                    "Failed to wait on tarpaulin: {}",
+                    e
+                )))
+            }
+        };
+    };
 
     if let Some(teardown) = proj.teardown.as_ref() {
         let res = Command::new("sh")
@@ -162,13 +219,16 @@ pub fn run_test(i: usize, context: &Context, proj: &CrateSpec, jobs: Option<&usi
     let _ = remove_dir_all(proj_dir.join("target"));
     let proj_res = results.join(proj_name);
 
+    let stdout = stdout_reading.join().unwrap();
+    let stderr = stderr_reading.join().unwrap();
+
     let _ = create_dir(&proj_res);
     let mut writer =
         BufWriter::new(File::create(proj_res.join(format!("{}.log", proj_name))).unwrap());
     writer.write_all(b"stdout:\n").unwrap();
-    writer.write_all(&tarp.stdout).unwrap();
+    writer.write_all(&stdout).unwrap();
     writer.write_all(b"\n\nstderr:\n").unwrap();
-    writer.write_all(&tarp.stderr).unwrap();
+    writer.write_all(&stderr).unwrap();
 
     let mut found_log = false;
     for entry in read_dir(&proj_dir).unwrap() {
@@ -188,5 +248,9 @@ pub fn run_test(i: usize, context: &Context, proj: &CrateSpec, jobs: Option<&usi
     if !found_log {
         warn!("Haven't found tarpaulin log file");
     }
-    Ok(())
+    if tarp.success() {
+        Ok(())
+    } else {
+        Err(RunError::Failed)
+    }
 }

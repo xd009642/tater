@@ -1,3 +1,4 @@
+use crate::ci;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{copy, create_dir, read_dir, remove_dir_all, remove_file, File};
@@ -135,28 +136,8 @@ pub fn run_test(
         }
     }
 
-    let mut args = vec![
-        "tarpaulin".to_string(),
-        "--debug".to_string(),
-        "--color".to_string(),
-        "never".to_string(),
-    ];
-    args.extend_from_slice(&context.args);
-    args.extend_from_slice(&proj.args);
-    if let Some(nj) = jobs {
-        args.extend_from_slice(&["--jobs".to_string(), nj.to_string()]);
-    }
-
-    let mut tarp = Command::new("cargo")
-        .args(&args)
-        .current_dir(&proj_dir)
-        .env("RUST_LOG", "cargo_tarpaulin=info")
-        .envs(&proj.env)
-        .envs(&context.env)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Unable to spawn process");
+    let mut tarp =
+        ci::spawn_tarpaulin(&proj_dir, &context, &proj).expect("Unable to spawn process");
 
     let system = System::default();
     // I need to take the stdout and stderr and start writing them now instead...

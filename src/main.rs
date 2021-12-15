@@ -9,6 +9,7 @@ use structopt::StructOpt;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, Layer, Registry};
 
+mod ci;
 mod runner;
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, StructOpt)]

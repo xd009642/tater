@@ -22,19 +22,22 @@ pub fn default_args() -> Vec<String> {
     ]
 }
 
-fn default_spawn(root: impl AsRef<Path>, context: &Context, spec: &CrateSpec) -> io::Result<Child> {
-    let mut args = default_args();
-    args.extend_from_slice(&context.args);
-    args.extend_from_slice(&spec.args);
-
-    Command::new("cargo")
-        .args(&args)
-        .current_dir(root)
+pub fn init_command(cmd: &mut Command) {
+    cmd.args(&default_args())
         .env("RUST_LOG", "cargo_tarpaulin=info")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+}
+
+fn default_spawn(root: impl AsRef<Path>, context: &Context, spec: &CrateSpec) -> io::Result<Child> {
+    let mut cmd = Command::new("cargo");
+    init_command(&mut cmd);
+
+    cmd.current_dir(root)
+        .args(&context.args)
+        .args(&spec.args)
         .envs(&spec.env)
         .envs(&context.env)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
         .spawn()
 }
 

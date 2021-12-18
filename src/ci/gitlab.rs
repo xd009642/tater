@@ -9,5 +9,8 @@ pub fn get_command(
     context: &Context,
     spec: &CrateSpec,
 ) -> io::Result<Child> {
-    todo!()
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "tater can't interpret gitlab yet",
+    ))
 }

@@ -1,5 +1,4 @@
 use crate::runner::*;
-use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -7,11 +6,6 @@ use std::process::{Child, Command, Stdio};
 pub mod github;
 pub mod gitlab;
 pub mod travis;
-
-pub struct CiContext {
-    pub args: Vec<String>,
-    pub env: HashMap<String, String>,
-}
 
 pub fn default_args() -> Vec<String> {
     vec![

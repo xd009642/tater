@@ -16,19 +16,19 @@ pub fn default_args() -> Vec<String> {
     ]
 }
 
-pub fn init_command(cmd: &mut Command) {
+pub fn init_command(root: impl AsRef<Path>, cmd: &mut Command) {
     cmd.args(&default_args())
         .env("RUST_LOG", "cargo_tarpaulin=info")
+        .current_dir(root)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 }
 
 fn default_spawn(root: impl AsRef<Path>, context: &Context, spec: &CrateSpec) -> io::Result<Child> {
     let mut cmd = Command::new("cargo");
-    init_command(&mut cmd);
+    init_command(root, &mut cmd);
 
-    cmd.current_dir(root)
-        .args(&context.args)
+    cmd.args(&context.args)
         .args(&spec.args)
         .envs(&spec.env)
         .envs(&context.env)

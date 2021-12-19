@@ -74,7 +74,7 @@ pub fn get_command(
     // First we look for one called coverage, then test, then ci. After that we go over all of them for
     // the first one containing `cargo test` or `cargo tarpaulin` usage
     let mut cmd = Command::new("cargo");
-    init_command(&mut cmd);
+    init_command(root.as_ref(), &mut cmd);
 
     if let Some(coverage) = workflows.iter().find(|x| find_job(x, "coverage")) {
         read_workflow(root.as_ref(), coverage, &mut cmd)
@@ -134,6 +134,7 @@ fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<
                     e => warn!("Unexpected with field: {}", e),
                 }
             }
+            info!("Spawning: {:?}", cmd);
             return cmd.spawn();
         } else if let Some(step) = job
             .steps
@@ -143,6 +144,7 @@ fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<
             // Convert grcov args to tarpaulin https://github.com/actions-rs/grcov
             if step.with.get("command").and_then(|x| x.as_str()) == Some("test") {
                 if let Some(dir) = workflow.defaults.working_directory() {
+                    info!("Working dir to {}", root.join(dir).display());
                     cmd.current_dir(root.join(dir));
                 }
                 if let Some(s) = step.with.get("args") {
@@ -150,12 +152,15 @@ fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<
                         process_arg_string(cmd, s.as_str().unwrap());
                     }
                 }
+                info!("Spawning: {:?}", cmd);
                 return cmd.spawn();
             }
         } else {
             for step in &job.steps {
                 // TODO detect kcov, cargo-llvm-cov, llvm coverage, or last attempt cargo test
                 // calls
+                
+                // TODO need to split up commands and handle things like `cd blah && cargo test;
                 if step.run.contains("cargo test") {
                     info!("Maybe one: '{}'", step.run);
                 }

@@ -31,7 +31,7 @@ struct Args {
     )]
     output: PathBuf,
     /// Limit the number of jobs, this will limit cargo build jobs and also the number of test
-    /// threads TODO
+    /// threads
     #[structopt(name = "jobs", short = "j", long = "jobs")]
     jobs: Option<usize>,
 }

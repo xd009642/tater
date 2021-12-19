@@ -3,5 +3,6 @@ results/
 output/
 target/
 *.swp
+*.swo
 **/*.rs.bk
 *.log

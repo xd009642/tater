@@ -35,7 +35,7 @@ fn default_spawn(root: impl AsRef<Path>, context: &Context, spec: &CrateSpec) ->
         .spawn()
 }
 
-pub fn spawn_tarpaulin<'a>(
+pub fn spawn_tarpaulin(
     root: impl AsRef<Path>,
     context: &Context,
     spec: &CrateSpec,

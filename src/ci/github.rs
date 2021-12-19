@@ -6,7 +6,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::process::{Child, Command};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// The overall github actions workflow, look [here](https://docs.github.com/en/actions/learn-github-actions/workflow-syntax-for-github-actions) for
 /// docs
@@ -16,6 +16,7 @@ pub struct Workflow {
     jobs: HashMap<String, Job>,
     #[serde(default)]
     defaults: Defaults,
+    env: HashMap<String, serde_yaml::Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -37,6 +38,77 @@ pub struct Job {
     #[serde(rename = "runs-on")]
     runs_on: String,
     steps: Vec<Step>,
+    #[serde(default)]
+    strategy: Strategy,
+}
+
+#[derive(Debug, PartialEq)]
+struct MatrixValue {
+    data: Vec<serde_yaml::Value>,
+    preconditions: HashMap<String, serde_yaml::Value>,
+}
+
+impl Job {
+    fn get_possible_matrix_values(&self, var: &str) -> Option<Vec<MatrixValue>> {
+        // If it's not directly in the matrix elements then it will be defined by the include table
+        // this is gonna be a bit wild
+
+        let parts = var.split(".").collect::<Vec<&str>>();
+        if parts.len() < 2 || parts[0] != "matrix" {
+            None
+        } else if self.strategy.matrix.elements.contains_key(parts[1]) {
+            let data = self.strategy.matrix.elements[parts[1]].clone();
+            let val = MatrixValue {
+                data,
+                preconditions: Default::default(),
+            };
+            Some(vec![val])
+        } else if !self.strategy.matrix.include.is_empty() {
+            let mut res = vec![];
+            for map in &self.strategy.matrix.include {
+                if let Some(mapping) = map.as_mapping() {
+                    let mut current_val = None;
+                    let mut preconditions = HashMap::new();
+                    for (key, val) in mapping.iter() {
+                        if key.as_str() == Some(parts[1]) {
+                            if let Some(s) = val.as_sequence() {
+                                current_val = Some(s.clone());
+                            } else {
+                                current_val = Some(vec![val.clone()]);
+                            }
+                        } else if let Some(s) = key.as_str() {
+                            preconditions.insert(s.to_string(), val.clone());
+                        } else {
+                            warn!("Unexpected key type in GHA matrix: {:?}", key);
+                        }
+                    }
+                    if let Some(data) = current_val {
+                        res.push(MatrixValue {
+                            data,
+                            preconditions,
+                        })
+                    }
+                }
+            }
+            Some(res)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct Strategy {
+    #[serde(default)]
+    matrix: Matrix,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct Matrix {
+    #[serde(flatten)]
+    elements: HashMap<String, Vec<serde_yaml::Value>>,
+    #[serde(default)]
+    include: Vec<serde_yaml::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,6 +171,7 @@ pub fn get_command(
 }
 
 fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<Child> {
+    debug!("Processing workflow: {}", workflow.display());
     let workflow = fs::File::open(workflow)?;
     let workflow: Workflow = serde_yaml::from_reader(workflow)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
@@ -159,7 +232,7 @@ fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<
             for step in &job.steps {
                 // TODO detect kcov, cargo-llvm-cov, llvm coverage, or last attempt cargo test
                 // calls
-                
+
                 // TODO need to split up commands and handle things like `cd blah && cargo test;
                 if step.run.contains("cargo test") {
                     info!("Maybe one: '{}'", step.run);
@@ -193,7 +266,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn example_yamls() {
+    fn openmls_yaml() {
         let x = r#"
 name: Tests & Checks
 
@@ -255,5 +328,121 @@ jobs:
         assert_eq!(result.defaults.working_directory(), Some("openmls"));
 
         assert_eq!(result.jobs.get("tests").unwrap().steps.len(), 5);
+    }
+
+    #[test]
+    fn hyper_yaml() {
+        let x = r#"
+name: CI
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: Test ${{ matrix.rust }} on ${{ matrix.os }}
+    needs: [style]
+    strategy:
+      matrix:
+        rust:
+          - stable
+          - beta
+          - nightly
+
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macOS-latest
+
+        include:
+          - rust: stable
+            features: "--features full"
+          - rust: beta
+            features: "--features full"
+          - rust: nightly
+            features: "--features full,nightly"
+            benches: true
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v1
+
+      - name: Install Rust (${{ matrix.rust }})
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+          override: true
+
+      - name: Test
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: ${{ matrix.features }}
+
+      - name: Test all benches
+        if: matrix.benches
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --benches ${{ matrix.features }}
+        "#;
+
+        let result: Workflow = serde_yaml::from_str(x).unwrap();
+        let job = &result.jobs["test"];
+
+        let rust_versions = job.get_possible_matrix_values("matrix.rust").unwrap();
+        assert!(rust_versions.iter().all(|x| x.preconditions.is_empty()));
+        assert!(rust_versions
+            .iter()
+            .all(|x| x.data.iter().all(|y| y.is_string())));
+        assert_eq!(
+            rust_versions[0]
+                .data
+                .iter()
+                .filter_map(|x| x.as_str())
+                .collect::<Vec<_>>(),
+            vec!["stable", "beta", "nightly"]
+        );
+
+        let os_versions = job.get_possible_matrix_values("matrix.os").unwrap();
+        assert!(os_versions.iter().all(|x| x.preconditions.is_empty()));
+        assert!(os_versions
+            .iter()
+            .all(|x| x.data.iter().all(|y| y.is_string())));
+        assert_eq!(
+            os_versions[0]
+                .data
+                .iter()
+                .filter_map(|x| x.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ubuntu-latest", "windows-latest", "macOS-latest"]
+        );
+
+        let mut preconditions = HashMap::new();
+        preconditions.insert(
+            "rust".to_string(),
+            serde_yaml::Value::String("stable".to_string()),
+        );
+
+        let features_stable = MatrixValue {
+            data: vec![serde_yaml::Value::String("--features full".to_string())],
+            preconditions,
+        };
+
+        let features = job.get_possible_matrix_values("matrix.features").unwrap();
+        assert_eq!(features[0], features_stable);
+        assert_eq!(features.len(), 3);
+
+        assert_eq!(job.get_possible_matrix_values("maatrix.foo"), None);
+        assert_eq!(job.get_possible_matrix_values("matrix.foo"), Some(vec![]));
+        assert_eq!(job.get_possible_matrix_values("matrix"), None);
     }
 }

@@ -1,4 +1,6 @@
 use crate::runner::*;
+use lazy_static::lazy_static;
+use regex::Regex;
 use std::io;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -14,6 +16,19 @@ pub fn default_args() -> Vec<String> {
         "--color".to_string(),
         "never".to_string(),
     ]
+}
+
+pub fn extract_tarpaulin_commands(input: &str) -> Vec<String> {
+    lazy_static! {
+        static ref TEST_CMD: Regex =
+            Regex::new(r#"cargo\s+test\s*([\-a-zA-Z\d\\\s\$\{\}\."~\n])*(;?|\s*~\\\s*\n|&&|$)"#)
+                .unwrap();
+    }
+    let mut res = vec![];
+    for m in TEST_CMD.find_iter(input) {
+        res.push(m.as_str().to_string());
+    }
+    res
 }
 
 pub fn init_command(root: impl AsRef<Path>, cmd: &mut Command) {
@@ -44,4 +59,41 @@ pub fn spawn_tarpaulin(
         .or_else(|_| gitlab::get_command(root.as_ref(), context, spec))
         .or_else(|_| travis::get_command(root.as_ref(), context, spec))
         .or_else(|_| default_spawn(root, context, spec))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn command_regex_test() {
+        assert_eq!(
+            extract_tarpaulin_commands("cargo test"),
+            vec!["cargo test".to_string()]
+        );
+        assert_eq!(
+            extract_tarpaulin_commands("cargo test --all-features"),
+            vec!["cargo test --all-features".to_string()]
+        );
+        assert_eq!(
+            extract_tarpaulin_commands("cargo test --all-features -- --test-threads 8"),
+            vec!["cargo test --all-features -- --test-threads 8".to_string()]
+        );
+        assert_eq!(
+            extract_tarpaulin_commands("cargo test -- --skip \"this\""),
+            vec!["cargo test -- --skip \"this\"".to_string()]
+        );
+        assert_eq!(
+            extract_tarpaulin_commands("cargo test ; -- --skip \"this\""),
+            vec!["cargo test ;".to_string()]
+        );
+        assert_eq!(
+            extract_tarpaulin_commands("cargo test \\ \n -- hello"),
+            vec!["cargo test \\ \n -- hello".to_string()]
+        );
+        assert_eq!(
+            extract_tarpaulin_commands("cargo test\n -- hello"),
+            vec!["cargo test\n".to_string()]
+        );
+    }
 }

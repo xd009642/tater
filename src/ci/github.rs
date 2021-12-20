@@ -1,5 +1,7 @@
 use crate::ci::init_command;
 use crate::runner::*;
+use lazy_static::lazy_static;
+use regex::Regex;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
@@ -172,6 +174,9 @@ pub fn get_command(
 
 fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<Child> {
     debug!("Processing workflow: {}", workflow.display());
+    lazy_static! {
+        static ref GHA_VARIABLE: Regex = Regex::new(r#"${{\s*(?P<v>[:alpha:]+)\s*}}"#).unwrap();
+    }
     let workflow = fs::File::open(workflow)?;
     let workflow: Workflow = serde_yaml::from_reader(workflow)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;

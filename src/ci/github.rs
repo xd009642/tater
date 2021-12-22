@@ -1,4 +1,4 @@
-use crate::ci::init_command;
+use crate::ci::*;
 use crate::runner::*;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -42,6 +42,32 @@ pub struct Job {
     steps: Vec<Step>,
     #[serde(default)]
     strategy: Strategy,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct Strategy {
+    #[serde(default)]
+    matrix: Matrix,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct Matrix {
+    #[serde(flatten)]
+    elements: HashMap<String, Vec<serde_yaml::Value>>,
+    #[serde(default)]
+    include: Vec<serde_yaml::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Step {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    uses: String,
+    #[serde(default)]
+    with: HashMap<String, serde_yaml::Value>,
+    #[serde(default)]
+    run: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -97,32 +123,6 @@ impl Job {
             None
         }
     }
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub struct Strategy {
-    #[serde(default)]
-    matrix: Matrix,
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub struct Matrix {
-    #[serde(flatten)]
-    elements: HashMap<String, Vec<serde_yaml::Value>>,
-    #[serde(default)]
-    include: Vec<serde_yaml::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Step {
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    uses: String,
-    #[serde(default)]
-    with: HashMap<String, serde_yaml::Value>,
-    #[serde(default)]
-    run: String,
 }
 
 fn find_job(file: &Path, name: &str) -> bool {
@@ -241,6 +241,8 @@ fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<
                 // TODO need to split up commands and handle things like `cd blah && cargo test;
                 if step.run.contains("cargo test") {
                     info!("Maybe one: '{}'", step.run);
+                    let commands = extract_tarpaulin_commands(&step.run);
+                    info!("Found commands: {:?}", commands);
                 }
             }
         }

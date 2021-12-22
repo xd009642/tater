@@ -46,7 +46,7 @@
     },
     {
       "repository_url": "https://github.com/habitat-sh/habitat",
-      "args": [],
+      "args": ["--avoid-cfg-tarpaulin"],
       "env": {}
     },
     {

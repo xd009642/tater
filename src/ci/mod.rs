@@ -32,7 +32,7 @@ pub fn extract_tarpaulin_commands(input: &str) -> Vec<String> {
     let mut res = vec![];
     for s in line_break_removed.lines() {
         for m in TEST_CMD.find_iter(s) {
-            res.push(m.as_str().to_string());
+            res.push(m.as_str().replace("cargo test", "cargo tarpaulin"));
         }
     }
     res
@@ -76,31 +76,31 @@ mod test {
     fn command_regex_test() {
         assert_eq!(
             extract_tarpaulin_commands("cargo test"),
-            vec!["cargo test".to_string()]
+            vec!["cargo tarpaulin".to_string()]
         );
         assert_eq!(
             extract_tarpaulin_commands("cargo test --all-features"),
-            vec!["cargo test --all-features".to_string()]
+            vec!["cargo tarpaulin --all-features".to_string()]
         );
         assert_eq!(
             extract_tarpaulin_commands("cargo test --all-features -- --test-threads 8"),
-            vec!["cargo test --all-features -- --test-threads 8".to_string()]
+            vec!["cargo tarpaulin --all-features -- --test-threads 8".to_string()]
         );
         assert_eq!(
             extract_tarpaulin_commands("cargo test -- --skip \"this\""),
-            vec!["cargo test -- --skip \"this\"".to_string()]
+            vec!["cargo tarpaulin -- --skip \"this\"".to_string()]
         );
         assert_eq!(
             extract_tarpaulin_commands("cargo test ; -- --skip \"this\""),
-            vec!["cargo test ;".to_string()]
+            vec!["cargo tarpaulin ;".to_string()]
         );
         assert_eq!(
             extract_tarpaulin_commands("cargo test \\ \n -- hello"),
-            vec!["cargo test   -- hello".to_string()]
+            vec!["cargo tarpaulin   -- hello".to_string()]
         );
         assert_eq!(
             extract_tarpaulin_commands("cargo test\n -- hello"),
-            vec!["cargo test".to_string()]
+            vec!["cargo tarpaulin".to_string()]
         );
     }
 }

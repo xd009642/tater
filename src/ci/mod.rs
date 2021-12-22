@@ -1,6 +1,6 @@
 use crate::runner::*;
 use lazy_static::lazy_static;
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 use std::io;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -20,13 +20,20 @@ pub fn default_args() -> Vec<String> {
 
 pub fn extract_tarpaulin_commands(input: &str) -> Vec<String> {
     lazy_static! {
+        static ref FIX_LINES: Regex = RegexBuilder::new(r#"\\\s*\n"#)
+            .multi_line(true)
+            .build()
+            .unwrap();
         static ref TEST_CMD: Regex =
             Regex::new(r#"cargo\s+test\s*([\-a-zA-Z\d\\\s\$\{\}\."~\n])*(;?|\s*~\\\s*\n|&&|$)"#)
                 .unwrap();
     }
+    let line_break_removed = FIX_LINES.replace_all(input, " ");
     let mut res = vec![];
-    for m in TEST_CMD.find_iter(input) {
-        res.push(m.as_str().to_string());
+    for s in line_break_removed.lines() {
+        for m in TEST_CMD.find_iter(s) {
+            res.push(m.as_str().to_string());
+        }
     }
     res
 }
@@ -89,11 +96,11 @@ mod test {
         );
         assert_eq!(
             extract_tarpaulin_commands("cargo test \\ \n -- hello"),
-            vec!["cargo test \\ \n -- hello".to_string()]
+            vec!["cargo test   -- hello".to_string()]
         );
         assert_eq!(
             extract_tarpaulin_commands("cargo test\n -- hello"),
-            vec!["cargo test\n".to_string()]
+            vec!["cargo test".to_string()]
         );
     }
 }

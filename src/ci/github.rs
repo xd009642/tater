@@ -172,6 +172,36 @@ pub fn get_command(
     }
 }
 
+fn handle_tarpaulin_workflow(step: &Step, cmd: &mut Command) -> io::Result<Child> {
+    // Extract tarpaulin args and merge https://github.com/actions-rs/tarpaulin
+    for (arg, val) in step
+        .with
+        .iter()
+        .filter(|(_, v)| v.is_string())
+        .map(|(k, v)| (k, v.as_str().unwrap()))
+    {
+        match arg.as_str() {
+            "run-types" => {
+                cmd.arg("--run-types");
+                cmd.args(val.split_whitespace());
+            }
+            "timeout" => {
+                cmd.arg("--timeout");
+                cmd.arg(val);
+            }
+            "out-type" => {
+                cmd.arg("--out");
+            }
+            "args" | "version" => {
+                process_arg_string(cmd, &val);
+            }
+            e => warn!("Unexpected with field: {}", e),
+        }
+    }
+    info!("Spawning: {:?}", cmd);
+    return cmd.spawn();
+}
+
 fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<Child> {
     debug!("Processing workflow: {}", workflow.display());
     lazy_static! {
@@ -187,33 +217,7 @@ fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<
             .iter()
             .find(|x| x.uses.starts_with("actions-rs/tarpaulin"))
         {
-            // Extract tarpaulin args and merge https://github.com/actions-rs/tarpaulin
-            for (arg, val) in step
-                .with
-                .iter()
-                .filter(|(_, v)| v.is_string())
-                .map(|(k, v)| (k, v.as_str().unwrap()))
-            {
-                match arg.as_str() {
-                    "run-types" => {
-                        cmd.arg("--run-types");
-                        cmd.args(val.split_whitespace());
-                    }
-                    "timeout" => {
-                        cmd.arg("--timeout");
-                        cmd.arg(val);
-                    }
-                    "out-type" => {
-                        cmd.arg("--out");
-                    }
-                    "args" | "version" => {
-                        process_arg_string(cmd, &val);
-                    }
-                    e => warn!("Unexpected with field: {}", e),
-                }
-            }
-            info!("Spawning: {:?}", cmd);
-            return cmd.spawn();
+            return handle_tarpaulin_workflow(step, cmd);
         } else if let Some(step) = job
             .steps
             .iter()
@@ -241,8 +245,17 @@ fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<
                 // TODO need to split up commands and handle things like `cd blah && cargo test;
                 if step.run.contains("cargo test") {
                     info!("Maybe one: '{}'", step.run);
-                    let commands = extract_tarpaulin_commands(&step.run);
+                    let mut commands = extract_tarpaulin_commands(&step.run);
+                    // TODO go over commands and replace `${{ matrix.x }}`
                     info!("Found commands: {:?}", commands);
+                    if commands.len() == 1 {
+                        cmd.args(commands[0].split_whitespace().skip(2));
+                    } else if commands.len() > 1 {
+                        // Should generate a tarpaulin.toml for these commands
+                        warn!("Ignoring commands: {:?}", &commands[1..]);
+                        cmd.args(commands[0].split_whitespace().skip(2));
+                    }
+                    return cmd.spawn();
                 }
             }
         }

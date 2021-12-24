@@ -4,6 +4,7 @@ use regex::{Regex, RegexBuilder};
 use std::io;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use tracing::{debug, info, warn};
 
 pub mod github;
 pub mod gitlab;
@@ -16,6 +17,27 @@ pub fn default_args() -> Vec<String> {
         "--color".to_string(),
         "never".to_string(),
     ]
+}
+
+pub fn try_to_populate_command(data: &str, cmd: &mut Command) -> bool {
+    // TODO need to split up commands and handle things like `cd blah && cargo test;
+    // Also, find tarpaulin ran via shell commands
+    if data.contains("cargo test") {
+        debug!("Maybe one: '{}'", data);
+        let mut commands = extract_tarpaulin_commands(data);
+        // TODO go over commands and replace `${{ matrix.x }}`
+        info!("Found commands: {:?}", commands);
+        if commands.len() == 1 {
+            cmd.args(commands[0].split_whitespace().skip(2));
+        } else if commands.len() > 1 {
+            // Should generate a tarpaulin.toml for these commands
+            warn!("Ignoring commands: {:?}", &commands[1..]);
+            cmd.args(commands[0].split_whitespace().skip(2));
+        }
+        true
+    } else {
+        false
+    }
 }
 
 pub fn extract_tarpaulin_commands(input: &str) -> Vec<String> {

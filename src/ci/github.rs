@@ -239,22 +239,7 @@ fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<
             }
         } else {
             for step in &job.steps {
-                // TODO detect kcov, cargo-llvm-cov, llvm coverage, or last attempt cargo test
-                // calls
-
-                // TODO need to split up commands and handle things like `cd blah && cargo test;
-                if step.run.contains("cargo test") {
-                    info!("Maybe one: '{}'", step.run);
-                    let mut commands = extract_tarpaulin_commands(&step.run);
-                    // TODO go over commands and replace `${{ matrix.x }}`
-                    info!("Found commands: {:?}", commands);
-                    if commands.len() == 1 {
-                        cmd.args(commands[0].split_whitespace().skip(2));
-                    } else if commands.len() > 1 {
-                        // Should generate a tarpaulin.toml for these commands
-                        warn!("Ignoring commands: {:?}", &commands[1..]);
-                        cmd.args(commands[0].split_whitespace().skip(2));
-                    }
+                if try_to_populate_command(step.run.as_str(), cmd) {
                     return cmd.spawn();
                 }
             }

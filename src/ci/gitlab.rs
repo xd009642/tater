@@ -1,3 +1,4 @@
+use crate::ci::*;
 use crate::runner::*;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -5,6 +6,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use tracing::{info, warn};
 
 #[derive(Debug, Deserialize)]
 pub struct Pipeline {
@@ -14,10 +16,16 @@ pub struct Pipeline {
     variables: HashMap<String, serde_yaml::Value>,
     #[serde(flatten)]
     stages: HashMap<serde_yaml::Value, Stage>,
+    /// TODO this can contain file references to other gitlab ci yamls that are inherited from - it
+    /// may be required for some projects to later load these files and interpret them to get the
+    /// best coverage command
+    #[serde(default)]
+    include: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Stage {
+    #[serde(default)]
     script: Vec<String>,
 }
 
@@ -29,10 +37,23 @@ pub fn get_command(
     let workflow = root.as_ref().join(".gitlab-ci.yml");
     if workflow.exists() {
         let workflow = fs::File::open(workflow)?;
+        let workflow: Pipeline = serde_yaml::from_reader(workflow)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+
+        let mut cmd = Command::new("cargo");
+        init_command(root.as_ref(), &mut cmd);
+        for (k, stage) in &workflow.stages {
+            info!("Scanning stage: {:?}", k);
+            for line in &stage.script {
+                if try_to_populate_command(line.as_str(), &mut cmd) {
+                    return cmd.spawn();
+                }
+            }
+        }
 
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "tater can't interpret gitlab yet",
+            "Did find valid command to turn into tarpaulin run",
         ))
     } else {
         Err(io::Error::new(

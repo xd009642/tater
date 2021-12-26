@@ -10,7 +10,7 @@ use std::thread;
 use std::time::Duration;
 use sysinfo::{ProcessExt, System, SystemExt};
 use thiserror::Error;
-use tracing::{error, info, warn};
+use tracing::{error, info, instrument, warn};
 use url::Url;
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -105,6 +105,7 @@ fn clone_project(
     }
 }
 
+#[instrument(skip(i, context, proj, jobs, projects, results), fields(project=%proj.repository_url))]
 pub fn run_test(
     i: usize,
     context: &Context,

@@ -8,7 +8,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::process::{Child, Command};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 /// The overall github actions workflow, look [here](https://docs.github.com/en/actions/learn-github-actions/workflow-syntax-for-github-actions) for
 /// docs
@@ -74,6 +74,25 @@ pub struct Step {
 struct MatrixValue {
     data: Vec<serde_yaml::Value>,
     preconditions: HashMap<String, serde_yaml::Value>,
+}
+
+fn value_string(val: &serde_yaml::Value) -> String {
+    use serde_yaml::Value;
+    match val {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => todo!(),
+    }
+}
+
+impl MatrixValue {
+    fn data_str(&self) -> String {
+        self.data
+            .iter()
+            .map(|x| value_string(x))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
 }
 
 impl Job {
@@ -202,11 +221,9 @@ fn handle_tarpaulin_workflow(step: &Step, cmd: &mut Command) -> io::Result<Child
     return cmd.spawn();
 }
 
+#[instrument(skip(root, cmd))]
 fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<Child> {
     debug!("Processing workflow: {}", workflow.display());
-    lazy_static! {
-        static ref GHA_VARIABLE: Regex = Regex::new(r#"${{\s*(?P<v>[:alpha:]+)\s*}}"#).unwrap();
-    }
     let workflow = fs::File::open(workflow)?;
     let workflow: Workflow = serde_yaml::from_reader(workflow)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
@@ -217,6 +234,7 @@ fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<
             .iter()
             .find(|x| x.uses.starts_with("actions-rs/tarpaulin"))
         {
+            info!("Found tarpaulin workflow");
             return handle_tarpaulin_workflow(step, cmd);
         } else if let Some(step) = job
             .steps
@@ -225,13 +243,15 @@ fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<
         {
             // Convert grcov args to tarpaulin https://github.com/actions-rs/grcov
             if step.with.get("command").and_then(|x| x.as_str()) == Some("test") {
+                info!("Found test command");
                 if let Some(dir) = workflow.defaults.working_directory() {
                     info!("Working dir to {}", root.join(dir).display());
                     cmd.current_dir(root.join(dir));
                 }
                 if let Some(s) = step.with.get("args") {
                     if s.is_string() {
-                        process_arg_string(cmd, s.as_str().unwrap());
+                        let run = replace_variables(s.as_str().unwrap(), job);
+                        process_arg_string(cmd, run.as_str());
                     }
                 }
                 info!("Spawning: {:?}", cmd);
@@ -239,7 +259,8 @@ fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<
             }
         } else {
             for step in &job.steps {
-                if try_to_populate_command(step.run.as_str(), cmd) {
+                let run = replace_variables(&step.run, job);
+                if try_to_populate_command(&run, cmd) {
                     return cmd.spawn();
                 }
             }
@@ -251,7 +272,38 @@ fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<
     ))
 }
 
+fn replace_variables(run: &str, job: &Job) -> String {
+    lazy_static! {
+        static ref GHA_VARIABLE: Regex =
+            Regex::new(r#"\$\{\{\s*(?P<name>[[[:alnum:]]\._]+)\s*\}\}"#).unwrap();
+    }
+    if let Some(vars) = GHA_VARIABLE.captures(run) {
+        let mut var_map = HashMap::<&str, String>::new();
+        for cap in vars.iter().filter_map(|x| x) {
+            let res = job.get_possible_matrix_values(cap.as_str());
+            match res {
+                Some(values) if !values.is_empty() => {
+                    var_map.insert(cap.as_str(), values[0].data_str());
+                }
+                _ => warn!("No replacement for `${{{{ {} }}}}`", cap.as_str()),
+            }
+        }
+        if !var_map.is_empty() {
+            let mut x = run.to_string();
+            for (k, v) in var_map.iter() {
+                x = x.replace(k, &v);
+            }
+            x.replace("${{", "").replace("}}", "")
+        } else {
+            run.to_string()
+        }
+    } else {
+        run.to_string()
+    }
+}
+
 fn process_arg_string(cmd: &mut Command, args: &str) {
+    info!("Applying args: '{}'", args);
     let mut skip_next = false;
     for arg in args.split_whitespace() {
         if skip_next {

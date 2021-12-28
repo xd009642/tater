@@ -138,7 +138,7 @@ pub fn run_test(
     }
 
     let mut tarp =
-        ci::spawn_tarpaulin(&proj_dir, &context, &proj).expect("Unable to spawn process");
+        ci::spawn_tarpaulin(&proj_dir, jobs, &context, &proj).expect("Unable to spawn process");
 
     let system = System::default();
     // I need to take the stdout and stderr and start writing them now instead...

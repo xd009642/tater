@@ -1,12 +1,12 @@
+#![allow(dead_code)]
 use crate::ci::*;
-use crate::runner::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
-use tracing::{info, warn};
+use std::process::{Child, Command};
+use tracing::info;
 
 #[derive(Debug, Deserialize)]
 pub struct Pipeline {
@@ -31,6 +31,7 @@ pub struct Stage {
 
 pub fn get_command(
     root: impl AsRef<Path>,
+    jobs: Option<&usize>,
     context: &Context,
     spec: &CrateSpec,
 ) -> io::Result<Child> {
@@ -41,7 +42,7 @@ pub fn get_command(
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
 
         let mut cmd = Command::new("cargo");
-        init_command(root.as_ref(), &mut cmd);
+        init_command(root.as_ref(), jobs, context, spec, &mut cmd);
         for (k, stage) in &workflow.stages {
             info!("Scanning stage: {:?}", k);
             for line in &stage.script {

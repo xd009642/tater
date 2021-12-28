@@ -1,5 +1,5 @@
+#![allow(dead_code)]
 use crate::ci::*;
-use crate::runner::*;
 use lazy_static::lazy_static;
 use regex::Regex;
 use serde::Deserialize;
@@ -8,7 +8,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::process::{Child, Command};
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 /// The overall github actions workflow, look [here](https://docs.github.com/en/actions/learn-github-actions/workflow-syntax-for-github-actions) for
 /// docs
@@ -154,6 +154,7 @@ fn find_job(file: &Path, name: &str) -> bool {
 
 pub fn get_command(
     root: impl AsRef<Path>,
+    jobs: Option<&usize>,
     context: &Context,
     spec: &CrateSpec,
 ) -> io::Result<Child> {
@@ -167,7 +168,7 @@ pub fn get_command(
     // First we look for one called coverage, then test, then ci. After that we go over all of them for
     // the first one containing `cargo test` or `cargo tarpaulin` usage
     let mut cmd = Command::new("cargo");
-    init_command(root.as_ref(), &mut cmd);
+    init_command(root.as_ref(), jobs, context, spec, &mut cmd);
 
     if let Some(coverage) = workflows.iter().find(|x| find_job(x, "coverage")) {
         read_workflow(root.as_ref(), coverage, &mut cmd)
@@ -228,7 +229,7 @@ fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<
     let workflow: Workflow = serde_yaml::from_reader(workflow)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
 
-    for (name, job) in &workflow.jobs {
+    for (_name, job) in &workflow.jobs {
         if let Some(step) = job
             .steps
             .iter()
@@ -310,7 +311,7 @@ fn process_arg_string(cmd: &mut Command, args: &str) {
             skip_next = false;
             continue;
         }
-        if arg == "--color" {
+        if arg == "--color" || arg == "--coveralls" {
             skip_next = true;
             continue;
         }

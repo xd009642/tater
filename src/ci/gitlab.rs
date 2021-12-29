@@ -53,7 +53,7 @@ pub fn get_command(
         }
 
         Err(io::Error::new(
-            io::ErrorKind::Unsupported,
+            io::ErrorKind::NotFound,
             "Did find valid command to turn into tarpaulin run",
         ))
     } else {

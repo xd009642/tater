@@ -9,6 +9,7 @@ use tracing::{debug, info, warn};
 pub mod github;
 pub mod gitlab;
 pub mod travis;
+pub mod types;
 
 pub fn default_args() -> Vec<String> {
     vec![

@@ -146,7 +146,7 @@
     },
     {
       "repository_url": "https://github.com/rust-lang/futures-rs",
-      "args": ["--all-features", "--workspace"],
+      "args": [],
       "env": {}
     },
     {
@@ -206,7 +206,7 @@
     },
     {
       "repository_url": "https://github.com/dtolnay/syn",
-      "args": ["--all-features", "--release"],
+      "args": [],
       "env": {}
     },
     {
@@ -992,7 +992,7 @@
       "env": {}
     },
     {
-      "repository_url": "https://github.com/wasm-lsp/wasm-language-server",
+      "repository_url": "https://github.com/wasm-lsp/wasm-lsp-server",
       "args": ["--packages", "xtask", "wash-lsp-clu", "wasm-lsp-languages", "wasm-lsp-macros", 
       "wasm-lsp-server", "wasm-lsp-syntax", "wasm-lsp-testing"],
       "env": {}

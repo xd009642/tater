@@ -9,6 +9,7 @@ use structopt::StructOpt;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, Layer, Registry};
 
+mod ci;
 mod runner;
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, StructOpt)]
@@ -30,7 +31,7 @@ struct Args {
     )]
     output: PathBuf,
     /// Limit the number of jobs, this will limit cargo build jobs and also the number of test
-    /// threads TODO
+    /// threads
     #[structopt(name = "jobs", short = "j", long = "jobs")]
     jobs: Option<usize>,
 }

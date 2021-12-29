@@ -1,3 +1,4 @@
+use crate::ci;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{copy, create_dir, read_dir, remove_dir_all, remove_file, File};
@@ -9,7 +10,7 @@ use std::thread;
 use std::time::Duration;
 use sysinfo::{ProcessExt, System, SystemExt};
 use thiserror::Error;
-use tracing::{error, info, warn};
+use tracing::{error, info, instrument, warn};
 use url::Url;
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -104,6 +105,7 @@ fn clone_project(
     }
 }
 
+#[instrument(skip(i, context, proj, jobs, projects, results), fields(project=%proj.repository_url))]
 pub fn run_test(
     i: usize,
     context: &Context,
@@ -135,28 +137,8 @@ pub fn run_test(
         }
     }
 
-    let mut args = vec![
-        "tarpaulin".to_string(),
-        "--debug".to_string(),
-        "--color".to_string(),
-        "never".to_string(),
-    ];
-    args.extend_from_slice(&context.args);
-    args.extend_from_slice(&proj.args);
-    if let Some(nj) = jobs {
-        args.extend_from_slice(&["--jobs".to_string(), nj.to_string()]);
-    }
-
-    let mut tarp = Command::new("cargo")
-        .args(&args)
-        .current_dir(&proj_dir)
-        .env("RUST_LOG", "cargo_tarpaulin=info")
-        .envs(&proj.env)
-        .envs(&context.env)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Unable to spawn process");
+    let mut tarp =
+        ci::spawn_tarpaulin(&proj_dir, jobs, &context, &proj).expect("Unable to spawn process");
 
     let system = System::default();
     // I need to take the stdout and stderr and start writing them now instead...

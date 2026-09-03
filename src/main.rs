@@ -1,10 +1,12 @@
 use crate::runner::*;
+use std::collections::HashSet;
 use std::env;
-use std::fs::{create_dir, create_dir_all, remove_file, rename, File, OpenOptions};
+use std::fs::{create_dir, create_dir_all, read_to_string, remove_file, rename, File};
 use std::io::prelude::*;
 use std::io::{self, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc};
 use structopt::StructOpt;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, Layer, Registry};
@@ -34,6 +36,9 @@ struct Args {
     /// threads
     #[structopt(name = "jobs", short = "j", long = "jobs")]
     jobs: Option<usize>,
+    /// Maximum number of projects to run concurrently
+    #[structopt(long = "project-jobs", default_value = "1", parse(try_from_str = parse_project_jobs))]
+    project_jobs: usize,
     /// Keep failed project checkouts as compressed archives in their result directories
     #[structopt(long = "retain-failed")]
     retain_failed: bool,
@@ -63,6 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let context: Context = serde_json::from_reader(reader)?;
     let options = RunOptions {
         jobs: args.jobs,
+        project_jobs: args.project_jobs,
         retain_failed: args.retain_failed,
         disk_budget: args.disk_budget,
     };
@@ -70,12 +76,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn ctrl_handler() -> Result<mpsc::Receiver<()>, ctrlc::Error> {
-    let (sender, receiver) = mpsc::channel();
+fn ctrl_handler() -> Result<Arc<AtomicBool>, ctrlc::Error> {
+    let interrupted = Arc::new(AtomicBool::new(false));
+    let handler_flag = Arc::clone(&interrupted);
     ctrlc::set_handler(move || {
-        let _e = sender.send(());
+        handler_flag.store(true, Ordering::SeqCst);
     })?;
-    Ok(receiver)
+    Ok(interrupted)
+}
+
+fn parse_project_jobs(value: &str) -> Result<usize, String> {
+    match value.parse::<usize>() {
+        Ok(0) => Err("project jobs must be greater than zero".to_string()),
+        Ok(jobs) => Ok(jobs),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 fn setup_logging() {
@@ -88,66 +103,121 @@ fn setup_logging() {
     tracing::subscriber::set_global_default(subscriber).unwrap();
 }
 
-/// Returns the next crate to process for resuming a workflow
-fn get_progress(progress_file: &Path) -> std::io::Result<usize> {
-    if progress_file.is_file() {
-        let reader = BufReader::new(File::open(&progress_file)?);
-        if let Some(line) = reader.lines().next() {
-            let line = line?;
-            match line.trim().parse::<usize>() {
-                Ok(n) => Ok(n),
-                Err(_) => {
-                    warn!("Invalid progress file contents: {}", line);
-                    Ok(0)
-                }
-            }
-        } else {
-            Ok(0)
-        }
-    } else {
-        Ok(0)
+#[derive(Debug, Clone, Copy, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+enum ProjectOutcome {
+    Passed,
+    Failed,
+}
+
+#[derive(Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+struct Progress {
+    outcomes: Vec<Option<ProjectOutcome>>,
+}
+
+fn read_status(path: &Path) -> io::Result<HashSet<String>> {
+    match read_to_string(path) {
+        Ok(contents) => Ok(contents.lines().map(str::to_string).collect()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(HashSet::new()),
+        Err(error) => Err(error),
     }
 }
 
-fn write_progress(progress_file: &Path, index: usize) -> io::Result<()> {
-    let temporary = progress_file.with_extension("tmp");
-    let mut file = File::create(&temporary)?;
-    file.write_all(index.to_string().as_bytes())?;
-    file.sync_all()?;
-    rename(temporary, progress_file)?;
+fn get_progress(
+    progress_file: &Path,
+    pass_file: &Path,
+    fail_file: &Path,
+    context: &Context,
+) -> io::Result<Progress> {
+    let contents = match read_to_string(progress_file) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(Progress {
+                outcomes: vec![None; context.crates.len()],
+            })
+        }
+        Err(error) => return Err(error),
+    };
+    if let Ok(mut progress) = serde_json::from_str::<Progress>(&contents) {
+        progress.outcomes.resize(context.crates.len(), None);
+        progress.outcomes.truncate(context.crates.len());
+        return Ok(progress);
+    }
+
+    // Numeric checkpoints were written by older Tater versions. Recover their outcomes from the
+    // existing reports once, then immediately migrate to the structured format on the next result.
+    let completed = contents.trim().parse::<usize>().map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidData, "invalid progress file contents")
+    })?;
+    let passes = read_status(pass_file)?;
+    let failures = read_status(fail_file)?;
+    let mut outcomes = vec![None; context.crates.len()];
+    for (index, project) in context.crates.iter().take(completed).enumerate() {
+        let id = project.project_id();
+        let name = project.name().unwrap_or("unnamed_project");
+        outcomes[index] = if failures.contains(&id) || failures.contains(name) {
+            Some(ProjectOutcome::Failed)
+        } else if passes.contains(&id) || passes.contains(name) {
+            Some(ProjectOutcome::Passed)
+        } else {
+            warn!("No prior outcome found for completed project {}", index + 1);
+            Some(ProjectOutcome::Failed)
+        };
+    }
+    Ok(Progress { outcomes })
+}
+
+fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let temporary = path.with_extension("tmp");
+    let mut file = BufWriter::new(File::create(&temporary)?);
+    file.write_all(contents)?;
+    file.flush()?;
+    file.get_ref().sync_all()?;
+    rename(temporary, path)?;
     #[cfg(unix)]
     File::open(
-        progress_file
-            .parent()
-            .expect("progress file must have a parent directory"),
+        path.parent()
+            .expect("output file must have a parent directory"),
     )?
     .sync_all()?;
     Ok(())
 }
 
-fn should_exit(rx: &mpsc::Receiver<()>) -> bool {
-    if rx.try_recv().is_ok() {
-        info!("Pausing execution");
-        true
-    } else {
-        false
-    }
+fn write_progress(progress_file: &Path, progress: &Progress) -> io::Result<()> {
+    let contents = serde_json::to_vec(progress)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    write_atomic(progress_file, &contents)
 }
 
-fn get_status_linewriter(path: &Path, start_iter: usize) -> io::Result<BufWriter<File>> {
-    let file = if start_iter == 0 {
-        File::create(path)
-    } else {
-        OpenOptions::new().append(true).create(true).open(path)
-    }?;
-    Ok(BufWriter::new(file))
+fn write_status_reports(
+    pass_file: &Path,
+    fail_file: &Path,
+    context: &Context,
+    progress: &Progress,
+) -> io::Result<()> {
+    let mut passes = String::new();
+    let mut failures = String::new();
+    for (project, outcome) in context.crates.iter().zip(&progress.outcomes) {
+        match outcome {
+            Some(ProjectOutcome::Passed) => {
+                passes.push_str(&project.project_id());
+                passes.push('\n');
+            }
+            Some(ProjectOutcome::Failed) => {
+                failures.push_str(&project.project_id());
+                failures.push('\n');
+            }
+            None => {}
+        }
+    }
+    write_atomic(pass_file, passes.as_bytes())?;
+    write_atomic(fail_file, failures.as_bytes())
 }
 
 fn run_tater(
     context: &Context,
     output: &Path,
     options: RunOptions,
-    rx: mpsc::Receiver<()>,
+    interrupted: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     info!("Processing {} projects", context.crates.len());
     let projects = output.join("projects");
@@ -161,92 +231,178 @@ fn run_tater(
     if create_dir(&results).is_err() {
         warn!("Results directory already exists");
     }
-    let start_from = match get_progress(&progress_file) {
-        Ok(s) => s,
-        Err(e) => {
-            error!("Invalid progress file: {}", e);
-            0
-        }
-    };
-    if start_from > 0 {
-        info!("Resuming execution from {}", start_from);
+    let mut progress = get_progress(&progress_file, &pass_file, &fail_file, context)?;
+    let completed = progress
+        .outcomes
+        .iter()
+        .filter(|outcome| outcome.is_some())
+        .count();
+    if completed > 0 {
+        info!("Resuming execution with {} completed projects", completed);
     }
-    let mut fail_writer = get_status_linewriter(&fail_file, start_from)?;
-    let mut pass_writer = get_status_linewriter(&pass_file, start_from)?;
-    let mut failures = 0;
-    for (i, proj) in context.crates.iter().enumerate().skip(start_from) {
-        if let Some(budget) = options.disk_budget {
-            let used = directory_size(output)?;
-            if used >= budget {
-                return Err(format!(
-                    "Disk budget reached before project {}: {} of {} bytes used",
-                    i + 1,
-                    used,
-                    budget
-                )
-                .into());
-            }
-        }
-        let project_id = proj.project_id();
-        let res = run_test(i, context, proj, &projects, &results, &options);
-        let budget_failure = matches!(&res, Err(RunError::DiskBudgetExceeded { .. }));
-        let failed = match res {
-            Err(error) => {
-                failures += 1;
-                error!("Tarpaulin failed on {}: {}", project_id, error);
-                true
-            }
-            Ok(()) => {
-                pass_writer.write_all(project_id.as_bytes())?;
-                pass_writer.write_all(b"\n")?;
-                pass_writer.flush()?;
-                false
-            }
-        };
-        if failed {
-            fail_writer.write_all(project_id.as_bytes())?;
-            fail_writer.write_all(b"\n")?;
-            fail_writer.flush()?;
-        }
-        // Persist the result before advancing the checkpoint so resume cannot skip an unreported run.
-        write_progress(&progress_file, i + 1)?;
+    write_status_reports(&pass_file, &fail_file, context, &progress)?;
 
-        if budget_failure {
-            return Err(format!("Disk budget exceeded while processing project {}", i + 1).into());
+    if let Some(budget) = options.disk_budget {
+        let used = directory_size(output)?;
+        if used >= budget {
+            return Err(format!("Disk budget reached: {} of {} bytes used", used, budget).into());
         }
+    }
 
-        if let Some(budget) = options.disk_budget {
-            let used = directory_size(output)?;
-            if used > budget {
-                let retained_archive = results.join(&project_id).join("checkout.zip");
-                if retained_archive.is_file() {
-                    remove_file(&retained_archive)?;
-                    warn!(
-                        "Removed retained checkout for {} to reclaim disk space",
-                        project_id
-                    );
+    let completed_snapshot = progress
+        .outcomes
+        .iter()
+        .map(Option::is_some)
+        .collect::<Vec<_>>();
+    let next_project = AtomicUsize::new(0);
+    let stop = AtomicBool::new(false);
+    enum WorkerMessage {
+        Finished(usize, Result<(), RunError>),
+        Stopped(RunError),
+    }
+    let (result_sender, result_receiver) = mpsc::channel();
+    let mut budget_failure = false;
+    let mut stop_error = None;
+
+    std::thread::scope(|scope| -> Result<(), Box<dyn std::error::Error>> {
+        let projects_root = projects.as_path();
+        let results_root = results.as_path();
+        for _ in 0..options.project_jobs.min(context.crates.len().max(1)) {
+            let sender = result_sender.clone();
+            let completed = &completed_snapshot;
+            let next = &next_project;
+            let stop = &stop;
+            let interrupted = &interrupted;
+            scope.spawn(move || loop {
+                if stop.load(Ordering::SeqCst) || interrupted.load(Ordering::SeqCst) {
+                    break;
                 }
-                return Err(format!(
-                    "Disk budget exceeded after project {}: {} of {} bytes used",
-                    i + 1,
-                    used,
-                    budget
-                )
-                .into());
-            }
+                let index = next.fetch_add(1, Ordering::SeqCst);
+                if index >= context.crates.len() {
+                    break;
+                }
+                if completed[index] {
+                    continue;
+                }
+                if let Some(budget) = options.disk_budget {
+                    match directory_size(output) {
+                        Ok(used) if used >= budget => {
+                            stop.store(true, Ordering::SeqCst);
+                            if sender
+                                .send(WorkerMessage::Stopped(RunError::DiskBudgetExceeded {
+                                    used,
+                                    budget,
+                                }))
+                                .is_err()
+                            {
+                                break;
+                            }
+                            break;
+                        }
+                        Err(error) => {
+                            stop.store(true, Ordering::SeqCst);
+                            if sender
+                                .send(WorkerMessage::Stopped(RunError::Output(error)))
+                                .is_err()
+                            {
+                                break;
+                            }
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                let result = run_test(
+                    index,
+                    context,
+                    &context.crates[index],
+                    projects_root,
+                    results_root,
+                    &options,
+                );
+                if matches!(result, Err(RunError::DiskBudgetExceeded { .. })) {
+                    stop.store(true, Ordering::SeqCst);
+                }
+                if sender.send(WorkerMessage::Finished(index, result)).is_err() {
+                    break;
+                }
+            });
         }
+        drop(result_sender);
 
-        if should_exit(&rx) {
-            if failures > 0 {
-                return Err(format!(
-                    "Tarpaulin failed on {}/{} processed projects before pausing",
-                    failures,
-                    i + 1 - start_from
-                )
-                .into());
+        for message in result_receiver {
+            let (index, result) = match message {
+                WorkerMessage::Finished(index, result) => (index, result),
+                WorkerMessage::Stopped(error) => {
+                    if matches!(error, RunError::DiskBudgetExceeded { .. }) {
+                        budget_failure = true;
+                    }
+                    error!("Stopped scheduling projects: {}", error);
+                    stop_error = Some(error.to_string());
+                    stop.store(true, Ordering::SeqCst);
+                    continue;
+                }
+            };
+            let project_id = context.crates[index].project_id();
+            let outcome = match result {
+                Ok(()) => ProjectOutcome::Passed,
+                Err(error) => {
+                    if matches!(error, RunError::DiskBudgetExceeded { .. }) {
+                        budget_failure = true;
+                        stop.store(true, Ordering::SeqCst);
+                    }
+                    error!("Tarpaulin failed on {}: {}", project_id, error);
+                    ProjectOutcome::Failed
+                }
+            };
+            progress.outcomes[index] = Some(outcome);
+            // The checkpoint is authoritative; reports are deterministic projections rebuilt from it.
+            write_progress(&progress_file, &progress)?;
+            write_status_reports(&pass_file, &fail_file, context, &progress)?;
+
+            if let Some(budget) = options.disk_budget {
+                let used = directory_size(output)?;
+                if used > budget {
+                    let retained_archive = results.join(&project_id).join("checkout.zip");
+                    if retained_archive.is_file() {
+                        remove_file(&retained_archive)?;
+                        warn!(
+                            "Removed retained checkout for {} to reclaim disk space",
+                            project_id
+                        );
+                    }
+                    budget_failure = true;
+                    stop.store(true, Ordering::SeqCst);
+                }
             }
-            return Ok(());
         }
+        Ok(())
+    })?;
+
+    let complete = progress.outcomes.iter().all(Option::is_some);
+    let failures = progress
+        .outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome, Some(ProjectOutcome::Failed)))
+        .count();
+    if interrupted.load(Ordering::SeqCst) {
+        info!("Pausing execution");
+    }
+    if let Some(error) = stop_error {
+        return Err(format!("{}; progress has been saved", error).into());
+    }
+    if budget_failure {
+        return Err("Disk budget exceeded; progress has been saved".into());
+    }
+    if !complete {
+        if failures > 0 {
+            return Err(format!(
+                "Tarpaulin failed on {} completed projects before pausing",
+                failures
+            )
+            .into());
+        }
+        return Ok(());
     }
     match remove_file(&progress_file) {
         Ok(()) => {
@@ -290,18 +446,24 @@ mod tests {
             std::env::temp_dir().join(format!("tater-progress-test-{}", std::process::id()));
         create_dir_all(&output).expect("test output directory should be created");
         let progress = output.join("progress");
-        write_progress(&progress, 42).expect("initial progress should be written");
-        let (_sender, receiver) = mpsc::channel();
+        write_progress(
+            &progress,
+            &Progress {
+                outcomes: Vec::new(),
+            },
+        )
+        .expect("initial progress should be written");
 
         run_tater(
             &Context::default(),
             &output,
             RunOptions {
                 jobs: None,
+                project_jobs: 1,
                 retain_failed: false,
                 disk_budget: None,
             },
-            receiver,
+            Arc::new(AtomicBool::new(false)),
         )
         .expect("empty crater run should complete");
 
@@ -317,12 +479,25 @@ mod tests {
         create_dir_all(&output).expect("test output directory should be created");
         let progress = output.join("progress");
 
-        write_progress(&progress, 1).expect("first progress value should be written");
-        write_progress(&progress, 27).expect("replacement progress value should be written");
+        write_progress(
+            &progress,
+            &Progress {
+                outcomes: vec![Some(ProjectOutcome::Passed), None],
+            },
+        )
+        .expect("first progress value should be written");
+        let replacement = Progress {
+            outcomes: vec![Some(ProjectOutcome::Passed), Some(ProjectOutcome::Failed)],
+        };
+        write_progress(&progress, &replacement)
+            .expect("replacement progress value should be written");
 
         assert_eq!(
-            get_progress(&progress).expect("progress should be valid"),
-            27
+            serde_json::from_str::<Progress>(
+                &read_to_string(&progress).expect("progress should be readable")
+            )
+            .expect("progress should be valid"),
+            replacement
         );
         assert!(!progress.with_extension("tmp").exists());
         std::fs::remove_dir_all(&output).expect("test output directory should be removed");
@@ -338,6 +513,15 @@ mod tests {
 
         assert_eq!(decimal.disk_budget, Some(5_000_000_000));
         assert_eq!(binary.disk_budget, Some(5 * 1024 * 1024 * 1024));
+    }
+
+    /// Project concurrency must be positive and accepts an explicit worker count.
+    #[test]
+    fn project_jobs_argument_is_positive() {
+        assert!(Args::from_iter_safe(&["tater", "--project-jobs", "0"]).is_err());
+        let args = Args::from_iter_safe(&["tater", "--project-jobs", "3"])
+            .expect("positive project worker count should parse");
+        assert_eq!(args.project_jobs, 3);
     }
 
     /// Reaching the disk budget checkpoints no project and starts no clone.
@@ -359,17 +543,16 @@ mod tests {
             args: Vec::new(),
             env: HashMap::new(),
         };
-        let (_sender, receiver) = mpsc::channel();
-
         let error = run_tater(
             &context,
             &output,
             RunOptions {
                 jobs: None,
+                project_jobs: 1,
                 retain_failed: false,
                 disk_budget: Some(0),
             },
-            receiver,
+            Arc::new(AtomicBool::new(false)),
         )
         .expect_err("zero-byte budget should stop the run");
 

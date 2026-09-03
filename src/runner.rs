@@ -33,6 +33,7 @@ pub struct Context {
 #[derive(Debug, Clone, Copy)]
 pub struct RunOptions {
     pub jobs: Option<usize>,
+    pub project_jobs: usize,
     pub retain_failed: bool,
     pub disk_budget: Option<u64>,
 }

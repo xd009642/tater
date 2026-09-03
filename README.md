@@ -19,6 +19,14 @@ two seconds while Tarpaulin runs. If the cap is exceeded, Tater terminates the
 current process group, cleans its checkout without retaining it, saves progress,
 and exits with an error.
 
+## Concurrency
+
+Use `--project-jobs N` to run up to N repositories concurrently. This is
+separate from `--jobs`, which limits Cargo jobs inside every repository, so the
+maximum potential Cargo parallelism is their product. Project results may
+finish out of order, but checkpoints and the `pass` and `fail` reports are
+written by one coordinator in the original input order.
+
 ## License
 
 Tater is licensed under MIT for what it's worth.

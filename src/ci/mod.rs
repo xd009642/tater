@@ -8,6 +8,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use tracing::{debug, info, warn};
 
+pub mod compatibility;
 pub mod github;
 pub mod gitlab;
 pub mod travis;
@@ -75,8 +76,12 @@ pub fn init_command(
     spec: &CrateSpec,
     cmd: &mut Command,
 ) {
-    if !context.toolchain.is_empty() {
-        cmd.arg(&context.toolchain);
+    if let Some(toolchain) = spec
+        .toolchain
+        .as_ref()
+        .or_else(|| (!context.toolchain.is_empty()).then_some(&context.toolchain))
+    {
+        cmd.arg(toolchain);
     }
     if let Some(j) = jobs {
         cmd.args(&["--jobs", j.to_string().as_str()]);
@@ -119,6 +124,9 @@ pub fn spawn_tarpaulin(
     context: &Context,
     spec: &CrateSpec,
 ) -> io::Result<Child> {
+    if spec.ci.is_some() {
+        return default_spawn(root, jobs, context, spec);
+    }
     github::get_command(root.as_ref(), jobs, context, spec)
         .or_else(|_| gitlab::get_command(root.as_ref(), jobs, context, spec))
         .or_else(|_| travis::get_command(root.as_ref(), jobs, context, spec))
@@ -177,8 +185,10 @@ mod test {
                 .expect("repository URL should be valid"),
             args: vec!["--release".to_string()],
             env: HashMap::new(),
+            toolchain: None,
             setup: None,
             teardown: None,
+            ci: None,
         };
         let mut command = Command::new("cargo");
 

@@ -46,6 +46,9 @@ pub struct CrateSpec {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Per-invocation toolchain, used by collected commands such as `cargo +nightly tarpaulin`.
+    #[serde(default)]
+    pub toolchain: Option<String>,
     /// For anything that requires something like another server to be up and running
     /// This is going to be executed like `sh -c CrateSpec::setup` so not great but :shrug:
     #[serde(default)]
@@ -53,6 +56,15 @@ pub struct CrateSpec {
     /// To tear down any addition things that need running.
     #[serde(default)]
     pub teardown: Option<String>,
+    /// Metadata present when this entry came from the CI command collector.
+    #[serde(default)]
+    pub ci: Option<CiInvocation>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CiInvocation {
+    pub command: Vec<String>,
+    pub command_file: String,
 }
 
 #[derive(Error, Debug)]
@@ -81,6 +93,12 @@ pub enum RunError {
     Cleanup(io::Error),
     #[error("Disk budget exceeded: {used} of {budget} bytes used")]
     DiskBudgetExceeded { used: u64, budget: u64 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum RunOutcome {
+    Passed,
+    Skipped(String),
 }
 
 fn run_script(script: &str, project: &Path, log: &Path) -> io::Result<ExitStatus> {
@@ -349,6 +367,11 @@ impl CrateSpec {
             .repository_url
             .as_str()
             .bytes()
+            .chain(self.ci.iter().flat_map(|ci| {
+                ci.command_file
+                    .bytes()
+                    .chain(ci.command.iter().flat_map(|arg| arg.bytes()))
+            }))
             .fold(0xcbf29ce484222325_u64, |hash, byte| {
                 (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
             });
@@ -403,7 +426,7 @@ pub fn run_test(
     projects: &Path,
     results: &Path,
     options: &RunOptions,
-) -> Result<(), RunError> {
+) -> Result<RunOutcome, RunError> {
     let proj_name = proj.name().unwrap_or("unnamed_project");
     let project_id = proj.project_id();
     let proj_dir = projects.join(&project_id);
@@ -418,6 +441,12 @@ pub fn run_test(
     let proj_res = results.join(&project_id);
     create_dir_all(&proj_res).map_err(RunError::Output)?;
     let _guard = ProjectCleanupGuard(&proj_dir);
+    if let Some(reason) = ci::compatibility::unsupported_reason(&proj_dir, proj) {
+        info!("Skipping {}: {}", proj_name, reason);
+        clean_project_checkout(&proj_dir, &proj_res.join("checkout.zip"), false)
+            .map_err(RunError::Cleanup)?;
+        return Ok(RunOutcome::Skipped(reason));
+    }
     let output = projects
         .parent()
         .expect("projects directory must have an output parent");
@@ -535,7 +564,7 @@ pub fn run_test(
     let cleanup_result =
         clean_project_checkout(&proj_dir, &proj_res.join("checkout.zip"), retain_checkout);
     match (result, cleanup_result) {
-        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Ok(())) => Ok(RunOutcome::Passed),
         (Ok(()), Err(cleanup)) => Err(RunError::Cleanup(cleanup)),
         (Err(primary), Ok(())) => Err(primary),
         (Err(primary), Err(cleanup)) => {
@@ -602,16 +631,20 @@ mod tests {
                 .expect("first repository URL should be valid"),
             args: Vec::new(),
             env: HashMap::new(),
+            toolchain: None,
             setup: None,
             teardown: None,
+            ci: None,
         };
         let second = CrateSpec {
             repository_url: Url::parse("https://example.com/second/parser")
                 .expect("second repository URL should be valid"),
             args: Vec::new(),
             env: HashMap::new(),
+            toolchain: None,
             setup: None,
             teardown: None,
+            ci: None,
         };
 
         assert_ne!(first.project_id(), second.project_id());

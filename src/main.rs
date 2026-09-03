@@ -10,6 +10,7 @@ use std::sync::{mpsc, Arc};
 use structopt::StructOpt;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, Layer, Registry};
+use url::Url;
 
 mod ci;
 mod runner;
@@ -47,6 +48,113 @@ struct Args {
     disk_budget: Option<u64>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(untagged)]
+enum RepositoriesInput {
+    Tater(Context),
+    Collected(Vec<CollectedInvocation>),
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CollectedInvocation {
+    url: String,
+    command: Vec<String>,
+    command_file: String,
+}
+
+impl RepositoriesInput {
+    fn into_context(self) -> Result<Context, Box<dyn std::error::Error>> {
+        match self {
+            Self::Tater(context) => Ok(context),
+            Self::Collected(invocations) => {
+                let mut crates = Vec::with_capacity(invocations.len());
+                for invocation in invocations {
+                    let tarpaulin = invocation
+                        .command
+                        .iter()
+                        .position(|argument| argument == "tarpaulin")
+                        .ok_or_else(|| {
+                            format!(
+                                "collected command for {} does not invoke cargo tarpaulin",
+                                invocation.url
+                            )
+                        })?;
+                    if invocation.command.first().map(String::as_str) != Some("cargo") {
+                        return Err(format!(
+                            "collected command for {} does not invoke cargo tarpaulin",
+                            invocation.url
+                        )
+                        .into());
+                    }
+                    crates.push(CrateSpec {
+                        repository_url: Url::parse(&invocation.url)?,
+                        args: collected_arguments(&invocation.command[tarpaulin + 1..]),
+                        env: Default::default(),
+                        toolchain: invocation.command[1..tarpaulin]
+                            .iter()
+                            .find(|argument| argument.starts_with('+'))
+                            .cloned(),
+                        setup: None,
+                        teardown: None,
+                        ci: Some(CiInvocation {
+                            command: invocation.command,
+                            command_file: invocation.command_file,
+                        }),
+                    });
+                }
+                Ok(Context {
+                    crates,
+                    ..Context::default()
+                })
+            }
+        }
+    }
+}
+
+fn collected_arguments(arguments: &[String]) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut index = 0;
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        if argument == "--coveralls" || argument == "--color" {
+            index += 1;
+            if index < arguments.len() && !arguments[index].starts_with('-') {
+                index += 1;
+                while index < arguments.len() && arguments[index] != "}}" {
+                    index += 1;
+                }
+                index += usize::from(index < arguments.len());
+            }
+            continue;
+        }
+        if argument.starts_with("--coveralls=")
+            || argument.starts_with("--color=")
+            || argument.contains(">/dev/null")
+        {
+            index += 1;
+            continue;
+        }
+        if index + 1 < arguments.len() && arguments[index + 1].contains("${{") {
+            index += 2;
+            while index < arguments.len() && arguments[index] != "}}" {
+                index += 1;
+            }
+            index += usize::from(index < arguments.len());
+            continue;
+        }
+        if argument.contains("${{") {
+            while index < arguments.len() && arguments[index] != "}}" {
+                index += 1;
+            }
+            index += usize::from(index < arguments.len());
+            continue;
+        }
+        result.push(argument.clone());
+        index += 1;
+    }
+    result
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     setup_logging();
     let ctrlc_events = ctrl_handler()?;
@@ -65,7 +173,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let file = File::open(&args.repos)?;
     let reader = BufReader::new(file);
-    let context: Context = serde_json::from_reader(reader)?;
+    let context = serde_json::from_reader::<_, RepositoriesInput>(reader)?.into_context()?;
     let options = RunOptions {
         jobs: args.jobs,
         project_jobs: args.project_jobs,
@@ -103,10 +211,11 @@ fn setup_logging() {
     tracing::subscriber::set_global_default(subscriber).unwrap();
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 enum ProjectOutcome {
     Passed,
     Failed,
+    Skipped(String),
 }
 
 #[derive(Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -191,11 +300,13 @@ fn write_progress(progress_file: &Path, progress: &Progress) -> io::Result<()> {
 fn write_status_reports(
     pass_file: &Path,
     fail_file: &Path,
+    skip_file: &Path,
     context: &Context,
     progress: &Progress,
 ) -> io::Result<()> {
     let mut passes = String::new();
     let mut failures = String::new();
+    let mut skips = String::new();
     for (project, outcome) in context.crates.iter().zip(&progress.outcomes) {
         match outcome {
             Some(ProjectOutcome::Passed) => {
@@ -206,11 +317,18 @@ fn write_status_reports(
                 failures.push_str(&project.project_id());
                 failures.push('\n');
             }
+            Some(ProjectOutcome::Skipped(reason)) => {
+                skips.push_str(&project.project_id());
+                skips.push_str(": ");
+                skips.push_str(reason);
+                skips.push('\n');
+            }
             None => {}
         }
     }
     write_atomic(pass_file, passes.as_bytes())?;
     write_atomic(fail_file, failures.as_bytes())
+        .and_then(|()| write_atomic(skip_file, skips.as_bytes()))
 }
 
 fn run_tater(
@@ -225,6 +343,7 @@ fn run_tater(
     let progress_file = output.join("progress");
     let pass_file = output.join("pass");
     let fail_file = output.join("fail");
+    let skip_file = output.join("skip");
     if create_dir(&projects).is_err() {
         warn!("Projects directory already exists");
     }
@@ -240,7 +359,7 @@ fn run_tater(
     if completed > 0 {
         info!("Resuming execution with {} completed projects", completed);
     }
-    write_status_reports(&pass_file, &fail_file, context, &progress)?;
+    write_status_reports(&pass_file, &fail_file, &skip_file, context, &progress)?;
 
     if let Some(budget) = options.disk_budget {
         let used = directory_size(output)?;
@@ -257,7 +376,7 @@ fn run_tater(
     let next_project = AtomicUsize::new(0);
     let stop = AtomicBool::new(false);
     enum WorkerMessage {
-        Finished(usize, Result<(), RunError>),
+        Finished(usize, Result<RunOutcome, RunError>),
         Stopped(RunError),
     }
     let (result_sender, result_receiver) = mpsc::channel();
@@ -345,7 +464,8 @@ fn run_tater(
             };
             let project_id = context.crates[index].project_id();
             let outcome = match result {
-                Ok(()) => ProjectOutcome::Passed,
+                Ok(RunOutcome::Passed) => ProjectOutcome::Passed,
+                Ok(RunOutcome::Skipped(reason)) => ProjectOutcome::Skipped(reason),
                 Err(error) => {
                     if matches!(error, RunError::DiskBudgetExceeded { .. }) {
                         budget_failure = true;
@@ -358,7 +478,7 @@ fn run_tater(
             progress.outcomes[index] = Some(outcome);
             // The checkpoint is authoritative; reports are deterministic projections rebuilt from it.
             write_progress(&progress_file, &progress)?;
-            write_status_reports(&pass_file, &fail_file, context, &progress)?;
+            write_status_reports(&pass_file, &fail_file, &skip_file, context, &progress)?;
 
             if let Some(budget) = options.disk_budget {
                 let used = directory_size(output)?;
@@ -524,6 +644,21 @@ mod tests {
         assert_eq!(args.project_jobs, 3);
     }
 
+    /// Collector commands retain executable options without leaking CI expressions or secrets.
+    #[test]
+    fn collected_input_is_ready_to_execute() {
+        let input = serde_json::from_str::<RepositoriesInput>(
+            r#"[{"url":"https://github.com/example/project","command":["cargo","+nightly","tarpaulin","--features","full","--target","${{","matrix.target","}}","--coveralls","${{","secrets.TOKEN","}}"],"command_file":"https://raw.githubusercontent.com/example/project/revision/.github/workflows/ci.yml"}]"#,
+        )
+        .expect("collector JSON should parse");
+        let context = input.into_context().expect("collector JSON should convert");
+        let project = &context.crates[0];
+
+        assert_eq!(project.toolchain.as_deref(), Some("+nightly"));
+        assert_eq!(project.args, vec!["--features", "full"]);
+        assert!(project.ci.is_some());
+    }
+
     /// Reaching the disk budget checkpoints no project and starts no clone.
     #[test]
     fn disk_budget_stops_before_next_project() {
@@ -537,8 +672,10 @@ mod tests {
                     .expect("repository URL should be valid"),
                 args: Vec::new(),
                 env: HashMap::new(),
+                toolchain: None,
                 setup: None,
                 teardown: None,
+                ci: None,
             }],
             args: Vec::new(),
             env: HashMap::new(),

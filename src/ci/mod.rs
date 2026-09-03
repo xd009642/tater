@@ -2,6 +2,8 @@ use crate::runner::*;
 use lazy_static::lazy_static;
 use regex::{Regex, RegexBuilder};
 use std::io;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use tracing::{debug, info, warn};
@@ -79,6 +81,9 @@ pub fn init_command(
         .current_dir(root)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // A stalled run must be terminated as a unit: cargo, rustc, test binaries, and build scripts.
+    #[cfg(unix)]
+    cmd.process_group(0);
 }
 
 fn default_spawn(

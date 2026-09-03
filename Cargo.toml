@@ -25,3 +25,5 @@ tracing-subscriber = {version = "0.2.15", default-features = false, features = [
 url = "1.0"
 url_serde = "0.2.0"
 
+[target.'cfg(unix)'.dependencies]
+nix = "0.18.0"

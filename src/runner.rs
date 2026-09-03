@@ -1,14 +1,14 @@
 use crate::ci;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::{copy, create_dir, read_dir, remove_dir_all, remove_file, File};
+use std::fs::{copy, create_dir_all, read_dir, remove_dir_all, remove_file, File};
 use std::io::prelude::*;
-use std::io::{self, BufWriter};
+use std::io::{self, BufReader, BufWriter};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::Duration;
-use sysinfo::{ProcessExt, System, SystemExt};
+use sysinfo::{Pid, ProcessExt, System, SystemExt};
 use thiserror::Error;
 use tracing::{error, info, instrument, warn};
 use url::Url;
@@ -49,12 +49,121 @@ pub enum RunError {
     Git(String),
     #[error("Failed to run setup script: {0}")]
     Setup(io::Error),
+    #[error("Setup script exited with {0}")]
+    SetupFailed(ExitStatus),
     #[error("Failed to run tarpaulin: {0}")]
     Tarpaulin(String),
     #[error("Tarpaulin seems to have stalled")]
     Stalled,
-    #[error("Tarpaulin exited with a failure")]
-    Failed,
+    #[error("Tarpaulin exited with {0}")]
+    Failed(ExitStatus),
+    #[error("Failed to write run output: {0}")]
+    Output(io::Error),
+    #[error("Output writer thread panicked")]
+    OutputThread,
+    #[error("Failed to run teardown script: {0}")]
+    Teardown(io::Error),
+    #[error("Teardown script exited with {0}")]
+    TeardownFailed(ExitStatus),
+}
+
+fn run_script(script: &str, project: &Path, log: &Path) -> io::Result<ExitStatus> {
+    let output = File::create(log)?;
+    let errors = output.try_clone()?;
+    Command::new("sh")
+        .args(&["-c", script])
+        .current_dir(project)
+        .stdout(Stdio::from(output))
+        .stderr(Stdio::from(errors))
+        .status()
+}
+
+fn stream_output<R: Read>(reader: R, output: File) -> io::Result<()> {
+    let mut reader = BufReader::new(reader);
+    let mut writer = BufWriter::new(output);
+    io::copy(&mut reader, &mut writer)?;
+    writer.flush()
+}
+
+fn belongs_to_process_tree(system: &System, mut pid: Pid, root: Pid) -> bool {
+    while let Some(process) = system.process(pid) {
+        if pid == root {
+            return true;
+        }
+        match process.parent() {
+            Some(parent) if parent != pid => pid = parent,
+            _ => return false,
+        }
+    }
+    false
+}
+
+#[cfg(unix)]
+fn kill_process_tree(child: &mut Child) -> io::Result<()> {
+    use nix::sys::signal::{killpg, Signal};
+    use nix::unistd::Pid as NixPid;
+
+    let kill_result = killpg(NixPid::from_raw(child.id() as i32), Signal::SIGKILL)
+        .map_err(|error| io::Error::new(io::ErrorKind::Other, error));
+    let wait_result = child.wait().map(|_| ());
+    kill_result.and(wait_result)
+}
+
+#[cfg(not(unix))]
+fn kill_process_tree(child: &mut Child) -> io::Result<()> {
+    child.kill()?;
+    child.wait().map(|_| ())
+}
+
+fn wait_for_tarpaulin(child: &mut Child) -> Result<ExitStatus, RunError> {
+    let mut system = System::new();
+    let root = child.id() as Pid;
+    let mut idle_samples = 0;
+
+    // CPU usage is calculated from the difference between refreshes.
+    system.refresh_processes();
+    loop {
+        thread::sleep(Duration::from_secs(1));
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {
+                system.refresh_processes();
+                let cpu_usage: f32 = system
+                    .processes()
+                    .iter()
+                    .filter(|(pid, _)| belongs_to_process_tree(&system, **pid, root))
+                    .map(|(_, process)| process.cpu_usage())
+                    .sum();
+                if cpu_usage < 0.1 {
+                    idle_samples += 1;
+                } else {
+                    idle_samples = 0;
+                }
+
+                if idle_samples >= 60 {
+                    error!("Stalled, killing process group");
+                    kill_process_tree(child).map_err(|error| {
+                        RunError::Tarpaulin(format!(
+                            "Failed to kill stalled process group: {}",
+                            error
+                        ))
+                    })?;
+                    return Err(RunError::Stalled);
+                }
+            }
+            Err(error) => {
+                let cleanup_error = kill_process_tree(child).err();
+                let message = match cleanup_error {
+                    Some(cleanup) => format!(
+                        "Failed to wait on tarpaulin: {}; process cleanup also failed: {}",
+                        error, cleanup
+                    ),
+                    None => format!("Failed to wait on tarpaulin: {}", error),
+                };
+                return Err(RunError::Tarpaulin(message));
+            }
+        }
+    }
 }
 
 /// This is to make it easier to clean up the project after exiting from running the test with an
@@ -124,93 +233,72 @@ pub fn run_test(
             .map_err(|e| RunError::Git(e))?
     }
 
+    let proj_res = results.join(proj_name);
+    create_dir_all(&proj_res).map_err(RunError::Output)?;
     let _guard = ProjectCleanupGuard(&proj_dir);
 
-    if let Some(setup) = proj.setup.as_ref() {
-        let res = Command::new("sh")
-            .args(&["-c", setup])
-            .current_dir(&proj_dir)
-            .output();
-        if let Err(res) = res {
-            error!("setup failed for {}", proj_name);
-            return Err(RunError::Setup(res));
-        }
-    }
-
-    let mut tarp =
-        ci::spawn_tarpaulin(&proj_dir, jobs, &context, &proj).expect("Unable to spawn process");
-
-    let system = System::default();
-    // I need to take the stdout and stderr and start writing them now instead...
-    let mut stdout = tarp.stdout.take().unwrap();
-    let mut stderr = tarp.stderr.take().unwrap();
-
-    let stdout_reading = thread::spawn(move || {
-        let mut output = vec![];
-        let _ = stdout.read_to_end(&mut output);
-        output
-    });
-
-    let stderr_reading = thread::spawn(move || {
-        let mut output = vec![];
-        let _ = stderr.read_to_end(&mut output);
-        output
-    });
-
-    let mut time_doing_nothing = 0;
-    let tarp = loop {
-        // We know tarpaulin won't be immediately done so lets just sleep at the start of the loop
-        thread::sleep(Duration::new(10, 0));
-        match tarp.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                // Check the CPU level
-                if let Some(proc) = system.process(tarp.id() as _) {
-                    if proc.cpu_usage() < 0.1 {
-                        time_doing_nothing += 1;
-                    } else {
-                        time_doing_nothing = 0;
-                    }
-
-                    // If we've sampled < 0.1% CPU utilisation for a minute we should just give up
-                    if time_doing_nothing > 5 {
-                        error!("Stalled, killing");
-                        let _ = tarp.kill();
-                        return Err(RunError::Stalled);
-                    }
-                }
-            }
-            Err(e) => {
-                return Err(RunError::Tarpaulin(format!(
-                    "Failed to wait on tarpaulin: {}",
-                    e
-                )))
-            }
-        };
+    let setup_result = match proj.setup.as_ref() {
+        Some(setup) => match run_script(setup, &proj_dir, &proj_res.join("setup.log")) {
+            Ok(status) if status.success() => Ok(()),
+            Ok(status) => Err(RunError::SetupFailed(status)),
+            Err(error) => Err(RunError::Setup(error)),
+        },
+        None => Ok(()),
     };
 
-    if let Some(teardown) = proj.teardown.as_ref() {
-        let res = Command::new("sh")
-            .args(&["-c", teardown])
-            .current_dir(&proj_dir)
-            .output();
-        if let Err(res) = res {
-            warn!("teardown failed for {}: {}", proj_name, res);
-        }
-    }
-    let _ = remove_dir_all(proj_dir.join("target"));
-    let proj_res = results.join(proj_name);
+    let tarpaulin_result = if setup_result.is_ok() {
+        (|| -> Result<(), RunError> {
+            let stdout_file =
+                File::create(proj_res.join("stdout.log")).map_err(RunError::Output)?;
+            let stderr_file =
+                File::create(proj_res.join("stderr.log")).map_err(RunError::Output)?;
+            match ci::spawn_tarpaulin(&proj_dir, jobs, context, proj) {
+                Ok(mut tarp) => {
+                    let stdout = tarp
+                        .stdout
+                        .take()
+                        .expect("tarpaulin command must pipe stdout");
+                    let stderr = tarp
+                        .stderr
+                        .take()
+                        .expect("tarpaulin command must pipe stderr");
+                    let stdout_reading = thread::spawn(move || stream_output(stdout, stdout_file));
+                    let stderr_reading = thread::spawn(move || stream_output(stderr, stderr_file));
 
-    let stdout = stdout_reading.join().unwrap();
-    let stderr = stderr_reading.join().unwrap();
+                    let wait_result = wait_for_tarpaulin(&mut tarp);
+                    let stdout_result =
+                        stdout_reading.join().map_err(|_| RunError::OutputThread)?;
+                    let stderr_result =
+                        stderr_reading.join().map_err(|_| RunError::OutputThread)?;
+                    stdout_result.map_err(RunError::Output)?;
+                    stderr_result.map_err(RunError::Output)?;
 
-    let _ = create_dir(&proj_res);
-    let mut writer =
-        BufWriter::new(File::create(proj_res.join(format!("{}.log", proj_name))).unwrap());
-    writer.write_all(b"stdout:\n").unwrap();
-    writer.write_all(&stdout).unwrap();
-    writer.write_all(b"\n\nstderr:\n").unwrap();
-    writer.write_all(&stderr).unwrap();
+                    wait_result.and_then(|status| {
+                        if status.success() {
+                            Ok(())
+                        } else {
+                            Err(RunError::Failed(status))
+                        }
+                    })
+                }
+                Err(error) => Err(RunError::Tarpaulin(format!(
+                    "Unable to spawn process: {}",
+                    error
+                ))),
+            }
+        })()
+    } else {
+        setup_result
+    };
+
+    let teardown_result = match proj.teardown.as_ref() {
+        Some(teardown) => match run_script(teardown, &proj_dir, &proj_res.join("teardown.log")) {
+            Ok(status) if status.success() => Ok(()),
+            Ok(status) => Err(RunError::TeardownFailed(status)),
+            Err(error) => Err(RunError::Teardown(error)),
+        },
+        None => Ok(()),
+    };
 
     let mut found_log = false;
     for entry in read_dir(&proj_dir).unwrap() {
@@ -230,9 +318,59 @@ pub fn run_test(
     if !found_log {
         warn!("Haven't found tarpaulin log file");
     }
-    if tarp.success() {
-        Ok(())
-    } else {
-        Err(RunError::Failed)
+    match (tarpaulin_result, teardown_result) {
+        (Ok(()), teardown) => teardown,
+        (Err(primary), Ok(())) => Err(primary),
+        (Err(primary), Err(teardown)) => {
+            error!("Teardown also failed for {}: {}", proj_name, teardown);
+            Err(primary)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::process::CommandExt;
+
+    /// Script output is retained even when the script reports a failure.
+    #[test]
+    fn script_failure_preserves_output() {
+        let directory =
+            std::env::temp_dir().join(format!("tater-script-test-{}", std::process::id()));
+        fs::create_dir_all(&directory).expect("test directory should be created");
+        let log = directory.join("script.log");
+
+        let status = run_script("printf 'diagnostic'; exit 7", &directory, &log)
+            .expect("script should be executed");
+
+        assert_eq!(status.code(), Some(7));
+        assert_eq!(
+            fs::read_to_string(&log).expect("script log should be readable"),
+            "diagnostic"
+        );
+        fs::remove_dir_all(&directory).expect("test directory should be removed");
+    }
+
+    /// Killing a stalled run also reaps its cargo process instead of leaving a zombie.
+    #[cfg(unix)]
+    #[test]
+    fn process_tree_termination_reaps_child() {
+        let mut command = Command::new("sh");
+        command
+            .args(&["-c", "sleep 30 & wait"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command.process_group(0);
+        let mut child = command.spawn().expect("test process should start");
+
+        kill_process_tree(&mut child).expect("test process group should be terminated");
+
+        assert!(child
+            .try_wait()
+            .expect("terminated child status should be available")
+            .is_some());
     }
 }

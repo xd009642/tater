@@ -42,21 +42,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::from_args();
 
     if !args.repos.is_file() {
-        panic!("No repos file provided");
+        return Err(format!("Repos file does not exist: {}", args.repos.display()).into());
     }
     if args.output.is_file() {
-        panic!("Output directory is a file");
+        return Err(format!("Output directory is a file: {}", args.output.display()).into());
     }
     if !args.output.is_dir() {
         info!("Creating output directory: {}", args.output.display());
-        create_dir_all(&args.output).unwrap();
+        create_dir_all(&args.output)?;
     }
 
-    if let Ok(file) = File::open(args.repos) {
-        let reader = BufReader::new(file);
-        let context: Context = serde_json::from_reader(reader).expect("Unable to parse repos json");
-        run_tater(&context, &args.output, args.jobs, ctrlc_events);
-    }
+    let file = File::open(&args.repos)?;
+    let reader = BufReader::new(file);
+    let context: Context = serde_json::from_reader(reader)?;
+    run_tater(&context, &args.output, args.jobs, ctrlc_events)?;
     Ok(())
 }
 
@@ -121,7 +120,12 @@ fn get_status_linewriter(path: &Path, start_iter: usize) -> io::Result<BufWriter
     Ok(BufWriter::new(file))
 }
 
-fn run_tater(context: &Context, output: &Path, jobs: Option<usize>, rx: mpsc::Receiver<()>) {
+fn run_tater(
+    context: &Context,
+    output: &Path,
+    jobs: Option<usize>,
+    rx: mpsc::Receiver<()>,
+) -> Result<(), Box<dyn std::error::Error>> {
     info!("Processing {} projects", context.crates.len());
     let projects = output.join("projects");
     let results = output.join("results");
@@ -144,32 +148,46 @@ fn run_tater(context: &Context, output: &Path, jobs: Option<usize>, rx: mpsc::Re
     if start_from > 0 {
         info!("Resuming execution from {}", start_from);
     }
-    let mut fail_writer = get_status_linewriter(&fail_file, start_from).unwrap();
-    let mut pass_writer = get_status_linewriter(&pass_file, start_from).unwrap();
+    let mut fail_writer = get_status_linewriter(&fail_file, start_from)?;
+    let mut pass_writer = get_status_linewriter(&pass_file, start_from)?;
     let mut failures = 0;
     for (i, proj) in context.crates.iter().enumerate().skip(start_from) {
         let proj_name = proj.name().unwrap_or_else(|| "unnamed_project");
         let res = run_test(i, context, proj, jobs.as_ref(), &projects, &results);
-        let exit_index = if let Err(e) = res {
-            failures += 1;
-            error!("Tarpaulin failed on {}: {:?}", proj_name, e);
-            i
-        } else {
-            let _ = pass_writer.write_all(proj_name.as_bytes());
-            let _ = pass_writer.write_all(b"\n");
-            let _ = pass_writer.flush();
-            i + 1
+        let failed = match res {
+            Err(error) => {
+                failures += 1;
+                error!("Tarpaulin failed on {}: {}", proj_name, error);
+                true
+            }
+            Ok(()) => {
+                pass_writer.write_all(proj_name.as_bytes())?;
+                pass_writer.write_all(b"\n")?;
+                pass_writer.flush()?;
+                false
+            }
         };
+        let exit_index = if failed { i } else { i + 1 };
 
         if should_exit(&progress_file, exit_index, &rx) {
-            let _ = fail_writer.write_all(proj_name.as_bytes());
-            let _ = fail_writer.write_all(b"\n");
-            let _ = fail_writer.flush();
-            return;
-        } else if i == exit_index {
-            let _ = fail_writer.write_all(proj_name.as_bytes());
-            let _ = fail_writer.write_all(b"\n");
-            let _ = fail_writer.flush();
+            if failed {
+                fail_writer.write_all(proj_name.as_bytes())?;
+                fail_writer.write_all(b"\n")?;
+                fail_writer.flush()?;
+            }
+            if failures > 0 {
+                return Err(format!(
+                    "Tarpaulin failed on {}/{} processed projects before pausing",
+                    failures,
+                    i + 1 - start_from
+                )
+                .into());
+            }
+            return Ok(());
+        } else if failed {
+            fail_writer.write_all(proj_name.as_bytes())?;
+            fail_writer.write_all(b"\n")?;
+            fail_writer.flush()?;
         }
     }
     if failures > 0 {
@@ -178,5 +196,12 @@ fn run_tater(context: &Context, output: &Path, jobs: Option<usize>, rx: mpsc::Re
             failures,
             context.crates.len()
         );
+        return Err(format!(
+            "Tarpaulin failed on {}/{} projects",
+            failures,
+            context.crates.len()
+        )
+        .into());
     }
+    Ok(())
 }

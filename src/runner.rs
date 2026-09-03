@@ -1,10 +1,12 @@
 use crate::ci;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::{copy, create_dir_all, read_dir, remove_dir_all, remove_file, File};
+use std::fs::{
+    copy, create_dir_all, read_dir, remove_dir_all, remove_file, symlink_metadata, File,
+};
 use std::io::prelude::*;
 use std::io::{self, BufReader, BufWriter};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -12,6 +14,8 @@ use sysinfo::{Pid, ProcessExt, System, SystemExt};
 use thiserror::Error;
 use tracing::{error, info, instrument, warn};
 use url::Url;
+use zip::write::SimpleFileOptions;
+use zip::{CompressionMethod, ZipWriter};
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Context {
@@ -24,6 +28,13 @@ pub struct Context {
     /// Env vars for every tarpaulin evocation
     #[serde(default)]
     pub env: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RunOptions {
+    pub jobs: Option<usize>,
+    pub retain_failed: bool,
+    pub disk_budget: Option<u64>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -65,6 +76,10 @@ pub enum RunError {
     Teardown(io::Error),
     #[error("Teardown script exited with {0}")]
     TeardownFailed(ExitStatus),
+    #[error("Failed to remove checkout: {0}")]
+    Cleanup(io::Error),
+    #[error("Disk budget exceeded: {used} of {budget} bytes used")]
+    DiskBudgetExceeded { used: u64, budget: u64 },
 }
 
 fn run_script(script: &str, project: &Path, log: &Path) -> io::Result<ExitStatus> {
@@ -85,6 +100,97 @@ fn stream_output<R: Read>(reader: R, output: File) -> io::Result<()> {
     writer.flush()
 }
 
+pub fn directory_size(root: &Path) -> io::Result<u64> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut total = 0_u64;
+    while let Some(path) = pending.pop() {
+        let metadata = match symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            total = total.saturating_add(metadata.blocks().saturating_mul(512));
+        }
+        #[cfg(not(unix))]
+        {
+            total = total.saturating_add(metadata.len());
+        }
+        if metadata.is_dir() {
+            match read_dir(path) {
+                Ok(entries) => {
+                    for entry in entries {
+                        pending.push(entry?.path());
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    Ok(total)
+}
+
+fn archive_project(project: &Path, archive_path: &Path) -> io::Result<()> {
+    let temporary = archive_path.with_extension("zip.tmp");
+    let result = (|| {
+        let output = File::create(&temporary)?;
+        let mut archive = ZipWriter::new(output).set_auto_large_file();
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        let mut pending = read_dir(project)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<io::Result<Vec<PathBuf>>>()?;
+
+        while let Some(path) = pending.pop() {
+            let relative = path
+                .strip_prefix(project)
+                .expect("archived paths must belong to the project");
+            let metadata = std::fs::symlink_metadata(&path)?;
+            if metadata.is_dir() {
+                archive
+                    .add_directory_from_path(relative, options)
+                    .map_err(io::Error::other)?;
+                pending.extend(
+                    read_dir(path)?
+                        .map(|entry| entry.map(|entry| entry.path()))
+                        .collect::<io::Result<Vec<PathBuf>>>()?,
+                );
+            } else if metadata.file_type().is_symlink() {
+                archive
+                    .add_symlink_from_path(relative, std::fs::read_link(&path)?, options)
+                    .map_err(io::Error::other)?;
+            } else if metadata.is_file() {
+                archive
+                    .start_file_from_path(relative, options)
+                    .map_err(io::Error::other)?;
+                let mut input = BufReader::new(File::open(path)?);
+                io::copy(&mut input, &mut archive)?;
+            }
+        }
+        let output = archive.finish().map_err(io::Error::other)?;
+        output.sync_all()?;
+        std::fs::rename(&temporary, archive_path)
+    })();
+    if result.is_err() {
+        let _ = remove_file(temporary);
+    }
+    result
+}
+
+fn clean_project_checkout(project: &Path, archive_path: &Path, retain: bool) -> io::Result<()> {
+    match remove_dir_all(project.join("target")) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    if retain {
+        archive_project(project, archive_path)?;
+    }
+    remove_dir_all(project)
+}
+
 fn belongs_to_process_tree(system: &System, mut pid: Pid, root: Pid) -> bool {
     while let Some(process) = system.process(pid) {
         if pid == root {
@@ -103,8 +209,8 @@ fn kill_process_tree(child: &mut Child) -> io::Result<()> {
     use nix::sys::signal::{killpg, Signal};
     use nix::unistd::Pid as NixPid;
 
-    let kill_result = killpg(NixPid::from_raw(child.id() as i32), Signal::SIGKILL)
-        .map_err(|error| io::Error::new(io::ErrorKind::Other, error));
+    let kill_result =
+        killpg(NixPid::from_raw(child.id() as i32), Signal::SIGKILL).map_err(io::Error::other);
     let wait_result = child.wait().map(|_| ());
     kill_result.and(wait_result)
 }
@@ -115,10 +221,15 @@ fn kill_process_tree(child: &mut Child) -> io::Result<()> {
     child.wait().map(|_| ())
 }
 
-fn wait_for_tarpaulin(child: &mut Child) -> Result<ExitStatus, RunError> {
+fn wait_for_tarpaulin(
+    child: &mut Child,
+    output: &Path,
+    disk_budget: Option<u64>,
+) -> Result<ExitStatus, RunError> {
     let mut system = System::new();
     let root = child.id() as Pid;
     let mut idle_samples = 0;
+    let mut samples = 0;
 
     // CPU usage is calculated from the difference between refreshes.
     system.refresh_processes();
@@ -127,6 +238,7 @@ fn wait_for_tarpaulin(child: &mut Child) -> Result<ExitStatus, RunError> {
         match child.try_wait() {
             Ok(Some(status)) => return Ok(status),
             Ok(None) => {
+                samples += 1;
                 system.refresh_processes();
                 let cpu_usage: f32 = system
                     .processes()
@@ -149,6 +261,30 @@ fn wait_for_tarpaulin(child: &mut Child) -> Result<ExitStatus, RunError> {
                         ))
                     })?;
                     return Err(RunError::Stalled);
+                }
+                if samples % 2 == 0 {
+                    if let Some(budget) = disk_budget {
+                        let used = match directory_size(output) {
+                            Ok(used) => used,
+                            Err(error) => {
+                                let cleanup_error = kill_process_tree(child).err();
+                                if let Some(cleanup) = cleanup_error {
+                                    error!("Process cleanup also failed: {}", cleanup);
+                                }
+                                return Err(RunError::Output(error));
+                            }
+                        };
+                        if used > budget {
+                            error!("Disk budget exceeded, killing process group");
+                            kill_process_tree(child).map_err(|error| {
+                                RunError::Tarpaulin(format!(
+                                    "Failed to kill over-budget process group: {}",
+                                    error
+                                ))
+                            })?;
+                            return Err(RunError::DiskBudgetExceeded { used, budget });
+                        }
+                    }
                 }
             }
             Err(error) => {
@@ -180,8 +316,7 @@ impl CrateSpec {
     pub fn name(&self) -> Option<&str> {
         self.repository_url
             .path_segments()?
-            .filter(|segment| !segment.is_empty())
-            .next_back()
+            .rfind(|segment| !segment.is_empty())
     }
 
     pub fn project_id(&self) -> String {
@@ -229,10 +364,12 @@ fn clone_project(
     repository_url: &str,
     proj_name: &str,
 ) -> Result<(), String> {
+    let projects = projects.as_ref();
     let git_hnd = Command::new("git")
         .args(&[
             "clone",
             "--recurse-submodules",
+            "--shallow-submodules",
             "--depth",
             "1",
             repository_url,
@@ -249,6 +386,7 @@ fn clone_project(
         .map_err(|e| format!("Git may not be installed: {}", e))?;
 
     if !git.status.success() {
+        let _ = remove_dir_all(projects.join(proj_name));
         Err(format!("Git clone of {} failed", repository_url))
     } else {
         info!("{} cloned successfully", proj_name);
@@ -256,14 +394,14 @@ fn clone_project(
     }
 }
 
-#[instrument(skip(i, context, proj, jobs, projects, results), fields(project=%proj.repository_url))]
+#[instrument(skip(i, context, proj, projects, results, options), fields(project=%proj.repository_url))]
 pub fn run_test(
     i: usize,
     context: &Context,
     proj: &CrateSpec,
-    jobs: Option<&usize>,
     projects: &Path,
     results: &Path,
+    options: &RunOptions,
 ) -> Result<(), RunError> {
     let proj_name = proj.name().unwrap_or("unnamed_project");
     let project_id = proj.project_id();
@@ -279,6 +417,17 @@ pub fn run_test(
     let proj_res = results.join(&project_id);
     create_dir_all(&proj_res).map_err(RunError::Output)?;
     let _guard = ProjectCleanupGuard(&proj_dir);
+    let output = projects
+        .parent()
+        .expect("projects directory must have an output parent");
+    if let Some(budget) = options.disk_budget {
+        let used = directory_size(output).map_err(RunError::Output)?;
+        if used > budget {
+            clean_project_checkout(&proj_dir, &proj_res.join("checkout.zip"), false)
+                .map_err(RunError::Cleanup)?;
+            return Err(RunError::DiskBudgetExceeded { used, budget });
+        }
+    }
 
     let setup_result = match proj.setup.as_ref() {
         Some(setup) => match run_script(setup, &proj_dir, &proj_res.join("setup.log")) {
@@ -295,7 +444,7 @@ pub fn run_test(
                 File::create(proj_res.join("stdout.log")).map_err(RunError::Output)?;
             let stderr_file =
                 File::create(proj_res.join("stderr.log")).map_err(RunError::Output)?;
-            match ci::spawn_tarpaulin(&proj_dir, jobs, context, proj) {
+            match ci::spawn_tarpaulin(&proj_dir, options.jobs.as_ref(), context, proj) {
                 Ok(mut tarp) => {
                     let stdout = tarp
                         .stdout
@@ -308,7 +457,7 @@ pub fn run_test(
                     let stdout_reading = thread::spawn(move || stream_output(stdout, stdout_file));
                     let stderr_reading = thread::spawn(move || stream_output(stderr, stderr_file));
 
-                    let wait_result = wait_for_tarpaulin(&mut tarp);
+                    let wait_result = wait_for_tarpaulin(&mut tarp, output, options.disk_budget);
                     let stdout_result =
                         stdout_reading.join().map_err(|_| RunError::OutputThread)?;
                     let stderr_result =
@@ -344,28 +493,55 @@ pub fn run_test(
     };
 
     let mut found_log = false;
-    for entry in read_dir(&proj_dir).unwrap() {
-        let entry = entry.unwrap();
-        if let Some(name) = entry.path().file_name() {
-            if name.to_string_lossy().starts_with("tarpaulin-run") {
-                if copy(entry.path(), proj_res.join("tarpaulin-run.json")).is_ok() {
-                    let _ = remove_file(entry.path());
-                    found_log = true;
-                    break;
-                } else {
-                    warn!("Failed to copy log, still in project directory");
+    match read_dir(&proj_dir) {
+        Ok(entries) => {
+            for entry in entries {
+                match entry {
+                    Ok(entry) => {
+                        if let Some(name) = entry.path().file_name() {
+                            if name.to_string_lossy().starts_with("tarpaulin-run") {
+                                if copy(entry.path(), proj_res.join("tarpaulin-run.json")).is_ok() {
+                                    let _ = remove_file(entry.path());
+                                    found_log = true;
+                                    break;
+                                } else {
+                                    warn!("Failed to copy log, still in project directory");
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => warn!("Failed to inspect project output: {}", error),
                 }
             }
         }
+        Err(error) => warn!("Failed to inspect project for Tarpaulin logs: {}", error),
     }
     if !found_log {
         warn!("Haven't found tarpaulin log file");
     }
-    match (tarpaulin_result, teardown_result) {
+    let result = match (tarpaulin_result, teardown_result) {
         (Ok(()), teardown) => teardown,
         (Err(primary), Ok(())) => Err(primary),
         (Err(primary), Err(teardown)) => {
             error!("Teardown also failed for {}: {}", proj_name, teardown);
+            Err(primary)
+        }
+    };
+
+    let retain_checkout = result.is_err()
+        && options.retain_failed
+        && !matches!(&result, Err(RunError::DiskBudgetExceeded { .. }));
+    let cleanup_result =
+        clean_project_checkout(&proj_dir, &proj_res.join("checkout.zip"), retain_checkout);
+    match (result, cleanup_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Err(cleanup)) => Err(RunError::Cleanup(cleanup)),
+        (Err(primary), Ok(())) => Err(primary),
+        (Err(primary), Err(cleanup)) => {
+            error!(
+                "Checkout cleanup also failed for {}: {}",
+                proj_name, cleanup
+            );
             Err(primary)
         }
     }
@@ -438,5 +614,52 @@ mod tests {
         };
 
         assert_ne!(first.project_id(), second.project_id());
+    }
+
+    /// Retained failures exclude build artifacts, produce a readable archive, and remove checkout.
+    #[test]
+    fn failed_checkout_is_archived_without_target_directory() {
+        let directory =
+            std::env::temp_dir().join(format!("tater-archive-test-{}", std::process::id()));
+        let project = directory.join("project");
+        let archive_path = directory.join("checkout.zip");
+        fs::create_dir_all(project.join("src")).expect("source directory should be created");
+        fs::create_dir_all(project.join("target")).expect("target directory should be created");
+        fs::write(project.join("src/lib.rs"), "pub fn retained() {}")
+            .expect("source file should be written");
+        fs::write(project.join("target/artifact"), "large build output")
+            .expect("target file should be written");
+
+        clean_project_checkout(&project, &archive_path, true)
+            .expect("failed checkout should be retained");
+
+        assert!(!project.exists());
+        let archive_file = File::open(&archive_path).expect("archive should be readable");
+        let mut archive = zip::ZipArchive::new(archive_file).expect("archive should be valid");
+        let mut source = String::new();
+        archive
+            .by_name("src/lib.rs")
+            .expect("source should be retained")
+            .read_to_string(&mut source)
+            .expect("archived source should be readable");
+        assert_eq!(source, "pub fn retained() {}");
+        assert!(archive.by_name("target/artifact").is_err());
+        fs::remove_dir_all(&directory).expect("test directory should be removed");
+    }
+
+    /// Unretained checkouts are removed without creating an archive.
+    #[test]
+    fn checkout_is_deleted_without_retention() {
+        let directory =
+            std::env::temp_dir().join(format!("tater-delete-test-{}", std::process::id()));
+        let project = directory.join("project");
+        let archive_path = directory.join("checkout.zip");
+        fs::create_dir_all(&project).expect("project directory should be created");
+
+        clean_project_checkout(&project, &archive_path, false).expect("checkout should be deleted");
+
+        assert!(!project.exists());
+        assert!(!archive_path.exists());
+        fs::remove_dir_all(&directory).expect("test directory should be removed");
     }
 }

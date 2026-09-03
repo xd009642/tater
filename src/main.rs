@@ -34,6 +34,12 @@ struct Args {
     /// threads
     #[structopt(name = "jobs", short = "j", long = "jobs")]
     jobs: Option<usize>,
+    /// Keep failed project checkouts as compressed archives in their result directories
+    #[structopt(long = "retain-failed")]
+    retain_failed: bool,
+    /// Stop when Tater's output reaches this size, for example 500MB or 5GiB
+    #[structopt(long = "disk-budget", parse(try_from_str = parse_size::parse_size))]
+    disk_budget: Option<u64>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -55,7 +61,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file = File::open(&args.repos)?;
     let reader = BufReader::new(file);
     let context: Context = serde_json::from_reader(reader)?;
-    run_tater(&context, &args.output, args.jobs, ctrlc_events)?;
+    let options = RunOptions {
+        jobs: args.jobs,
+        retain_failed: args.retain_failed,
+        disk_budget: args.disk_budget,
+    };
+    run_tater(&context, &args.output, options, ctrlc_events)?;
     Ok(())
 }
 
@@ -135,7 +146,7 @@ fn get_status_linewriter(path: &Path, start_iter: usize) -> io::Result<BufWriter
 fn run_tater(
     context: &Context,
     output: &Path,
-    jobs: Option<usize>,
+    options: RunOptions,
     rx: mpsc::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     info!("Processing {} projects", context.crates.len());
@@ -164,8 +175,21 @@ fn run_tater(
     let mut pass_writer = get_status_linewriter(&pass_file, start_from)?;
     let mut failures = 0;
     for (i, proj) in context.crates.iter().enumerate().skip(start_from) {
+        if let Some(budget) = options.disk_budget {
+            let used = directory_size(output)?;
+            if used >= budget {
+                return Err(format!(
+                    "Disk budget reached before project {}: {} of {} bytes used",
+                    i + 1,
+                    used,
+                    budget
+                )
+                .into());
+            }
+        }
         let project_id = proj.project_id();
-        let res = run_test(i, context, proj, jobs.as_ref(), &projects, &results);
+        let res = run_test(i, context, proj, &projects, &results, &options);
+        let budget_failure = matches!(&res, Err(RunError::DiskBudgetExceeded { .. }));
         let failed = match res {
             Err(error) => {
                 failures += 1;
@@ -186,6 +210,31 @@ fn run_tater(
         }
         // Persist the result before advancing the checkpoint so resume cannot skip an unreported run.
         write_progress(&progress_file, i + 1)?;
+
+        if budget_failure {
+            return Err(format!("Disk budget exceeded while processing project {}", i + 1).into());
+        }
+
+        if let Some(budget) = options.disk_budget {
+            let used = directory_size(output)?;
+            if used > budget {
+                let retained_archive = results.join(&project_id).join("checkout.zip");
+                if retained_archive.is_file() {
+                    remove_file(&retained_archive)?;
+                    warn!(
+                        "Removed retained checkout for {} to reclaim disk space",
+                        project_id
+                    );
+                }
+                return Err(format!(
+                    "Disk budget exceeded after project {}: {} of {} bytes used",
+                    i + 1,
+                    used,
+                    budget
+                )
+                .into());
+            }
+        }
 
         if should_exit(&rx) {
             if failures > 0 {
@@ -231,6 +280,8 @@ fn run_tater(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use url::Url;
 
     /// A completed run removes its checkpoint so the next invocation starts from the beginning.
     #[test]
@@ -242,8 +293,17 @@ mod tests {
         write_progress(&progress, 42).expect("initial progress should be written");
         let (_sender, receiver) = mpsc::channel();
 
-        run_tater(&Context::default(), &output, None, receiver)
-            .expect("empty crater run should complete");
+        run_tater(
+            &Context::default(),
+            &output,
+            RunOptions {
+                jobs: None,
+                retain_failed: false,
+                disk_budget: None,
+            },
+            receiver,
+        )
+        .expect("empty crater run should complete");
 
         assert!(!progress.exists());
         std::fs::remove_dir_all(&output).expect("test output directory should be removed");
@@ -265,6 +325,56 @@ mod tests {
             27
         );
         assert!(!progress.with_extension("tmp").exists());
+        std::fs::remove_dir_all(&output).expect("test output directory should be removed");
+    }
+
+    /// Human-readable decimal and binary disk budgets are accepted by the CLI.
+    #[test]
+    fn disk_budget_argument_accepts_human_readable_sizes() {
+        let decimal = Args::from_iter_safe(&["tater", "--disk-budget", "5GB"])
+            .expect("decimal disk budget should parse");
+        let binary = Args::from_iter_safe(&["tater", "--disk-budget", "5GiB"])
+            .expect("binary disk budget should parse");
+
+        assert_eq!(decimal.disk_budget, Some(5_000_000_000));
+        assert_eq!(binary.disk_budget, Some(5 * 1024 * 1024 * 1024));
+    }
+
+    /// Reaching the disk budget checkpoints no project and starts no clone.
+    #[test]
+    fn disk_budget_stops_before_next_project() {
+        let output = std::env::temp_dir().join(format!("tater-budget-test-{}", std::process::id()));
+        create_dir_all(&output).expect("test output directory should be created");
+        let context = Context {
+            toolchain: String::new(),
+            target: None,
+            crates: vec![CrateSpec {
+                repository_url: Url::parse("https://example.invalid/owner/repository")
+                    .expect("repository URL should be valid"),
+                args: Vec::new(),
+                env: HashMap::new(),
+                setup: None,
+                teardown: None,
+            }],
+            args: Vec::new(),
+            env: HashMap::new(),
+        };
+        let (_sender, receiver) = mpsc::channel();
+
+        let error = run_tater(
+            &context,
+            &output,
+            RunOptions {
+                jobs: None,
+                retain_failed: false,
+                disk_budget: Some(0),
+            },
+            receiver,
+        )
+        .expect_err("zero-byte budget should stop the run");
+
+        assert!(error.to_string().contains("Disk budget reached"));
+        assert!(!output.join("progress").exists());
         std::fs::remove_dir_all(&output).expect("test output directory should be removed");
     }
 }

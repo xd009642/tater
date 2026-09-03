@@ -13,6 +13,7 @@ edition = "2018"
 [dependencies]
 ctrlc = "3.1.7"
 lazy_static = "1.4.0"
+parse-size = "1.1.0"
 regex = "1.5.4"
 serde = { version = "1.0.123", features = ["derive"] }
 serde_json = "1.0.62"
@@ -21,10 +22,11 @@ shlex = "2.0.1"
 structopt = "0.3.21"
 sysinfo = "0.22.0"
 thiserror = "1.0.30"
-tracing = { version = "0.1", default-features = false }
+tracing = { version = "0.1", default-features = false, features = ["attributes"] }
 tracing-subscriber = {version = "0.2.15", default-features = false, features = ["env-filter", "fmt", "chrono", "ansi", "smallvec", "tracing-log"]}
 url = "1.0"
 url_serde = "0.2.0"
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = "0.18.0"

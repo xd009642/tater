@@ -211,10 +211,13 @@ fn handle_tarpaulin_workflow(step: &Step, cmd: &mut Command) -> io::Result<Child
             }
             "out-type" => {
                 cmd.arg("--out");
+                cmd.arg(val);
             }
-            "args" | "version" => {
-                process_arg_string(cmd, &val);
+            "args" => {
+                process_arg_string(cmd, &val)?;
             }
+            // This controls which cargo-tarpaulin release the action installs, not its CLI.
+            "version" => {}
             e => warn!("Unexpected with field: {}", e),
         }
     }
@@ -252,7 +255,7 @@ fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<
                 if let Some(s) = step.with.get("args") {
                     if s.is_string() {
                         let run = replace_variables(s.as_str().unwrap(), job);
-                        process_arg_string(cmd, run.as_str());
+                        process_arg_string(cmd, run.as_str())?;
                     }
                 }
                 info!("Spawning: {:?}", cmd);
@@ -261,7 +264,7 @@ fn read_workflow(root: &Path, workflow: &Path, cmd: &mut Command) -> io::Result<
         } else {
             for step in &job.steps {
                 let run = replace_variables(&step.run, job);
-                if try_to_populate_command(&run, cmd) {
+                if try_to_populate_command(&run, cmd)? {
                     return cmd.spawn();
                 }
             }
@@ -303,10 +306,16 @@ fn replace_variables(run: &str, job: &Job) -> String {
     }
 }
 
-fn process_arg_string(cmd: &mut Command, args: &str) {
+fn process_arg_string(cmd: &mut Command, args: &str) -> io::Result<()> {
     info!("Applying args: '{}'", args);
     let mut skip_next = false;
-    for arg in args.split_whitespace() {
+    let args = shlex::split(args).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Invalid shell quoting in arguments: {}", args),
+        )
+    })?;
+    for arg in args {
         if skip_next {
             skip_next = false;
             continue;
@@ -315,13 +324,43 @@ fn process_arg_string(cmd: &mut Command, args: &str) {
             skip_next = true;
             continue;
         }
+        if arg.starts_with("--color=") || arg.starts_with("--coveralls=") {
+            continue;
+        }
         cmd.arg(arg);
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Action arguments retain quoted values and remove reporting options managed by tater.
+    #[test]
+    fn action_arguments_are_shell_parsed() {
+        let mut command = Command::new("cargo");
+
+        process_arg_string(
+            &mut command,
+            "--features \"client server\" --color always --coveralls token --release",
+        )
+        .expect("action arguments should have valid shell quoting");
+
+        let args = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(args, vec!["--features", "client server", "--release"]);
+    }
+
+    /// Malformed action quoting is reported instead of silently changing the invocation.
+    #[test]
+    fn malformed_action_arguments_are_rejected() {
+        let mut command = Command::new("cargo");
+        assert!(process_arg_string(&mut command, "--features \"unfinished").is_err());
+        assert_eq!(command.get_args().count(), 0);
+    }
 
     #[test]
     fn openmls_yaml() {

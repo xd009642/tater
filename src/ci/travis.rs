@@ -30,13 +30,13 @@ pub fn get_command(
         init_command(root.as_ref(), jobs, context, spec, &mut cmd);
         if let Some(after_success) = workflow.after_success.as_ref() {
             for line in after_success.lines() {
-                if try_to_populate_command(line, &mut cmd) {
+                if try_to_populate_command(line, &mut cmd)? {
                     return cmd.spawn();
                 }
             }
         } else {
             for line in &workflow.script {
-                if try_to_populate_command(line.as_str(), &mut cmd) {
+                if try_to_populate_command(line.as_str(), &mut cmd)? {
                     return cmd.spawn();
                 }
             }

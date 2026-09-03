@@ -22,23 +22,31 @@ pub fn default_args() -> Vec<String> {
     ]
 }
 
-pub fn try_to_populate_command(data: &str, cmd: &mut Command) -> bool {
+pub fn try_to_populate_command(data: &str, cmd: &mut Command) -> io::Result<bool> {
     // TODO need to split up commands and handle things like `cd blah && cargo test;
     // Also, find tarpaulin ran via shell commands
     if data.contains("cargo test") {
         debug!("Maybe one: '{}'", data);
         let commands = extract_tarpaulin_commands(data);
         info!("Found commands: {:?}", commands);
-        if commands.len() == 1 {
-            cmd.args(commands[0].split_whitespace().skip(2));
-        } else if commands.len() > 1 {
+        if commands.is_empty() {
+            return Ok(false);
+        }
+        if commands.len() > 1 {
             // Should generate a tarpaulin.toml for these commands
             warn!("Ignoring commands: {:?}", &commands[1..]);
-            cmd.args(commands[0].split_whitespace().skip(2));
         }
-        true
+        let args =
+            shlex::split(commands[0].trim_end_matches(&[';', '&'][..])).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Invalid shell quoting in command: {}", commands[0]),
+                )
+            })?;
+        cmd.args(args.into_iter().skip(2));
+        Ok(true)
     } else {
-        false
+        Ok(false)
     }
 }
 
@@ -48,9 +56,7 @@ pub fn extract_tarpaulin_commands(input: &str) -> Vec<String> {
             .multi_line(true)
             .build()
             .unwrap();
-        static ref TEST_CMD: Regex =
-            Regex::new(r#"cargo\s+test\s*([\-a-zA-Z\d\\\s\$\{\}\."~\n])*(;?|\s*~\\\s*\n|&&|$)"#)
-                .unwrap();
+        static ref TEST_CMD: Regex = Regex::new(r#"cargo\s+test[^\n;&]*"#).unwrap();
     }
     let line_break_removed = FIX_LINES.replace_all(input, " ");
     let mut res = vec![];
@@ -69,11 +75,20 @@ pub fn init_command(
     spec: &CrateSpec,
     cmd: &mut Command,
 ) {
+    if !context.toolchain.is_empty() {
+        cmd.arg(&context.toolchain);
+    }
     if let Some(j) = jobs {
         cmd.args(&["--jobs", j.to_string().as_str()]);
     }
     cmd.args(&default_args())
         .env("RUST_LOG", "cargo_tarpaulin=info")
+        .args(
+            context
+                .target
+                .iter()
+                .flat_map(|target| ["--target", target]),
+        )
         .args(&context.args)
         .args(&spec.args)
         .envs(&spec.env)
@@ -113,6 +128,8 @@ pub fn spawn_tarpaulin(
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::collections::HashMap;
+    use url::Url;
 
     #[test]
     fn command_regex_test() {
@@ -134,7 +151,7 @@ mod test {
         );
         assert_eq!(
             extract_tarpaulin_commands("cargo test ; -- --skip \"this\""),
-            vec!["cargo tarpaulin ;".to_string()]
+            vec!["cargo tarpaulin ".to_string()]
         );
         assert_eq!(
             extract_tarpaulin_commands("cargo test \\ \n -- hello"),
@@ -144,5 +161,66 @@ mod test {
             extract_tarpaulin_commands("cargo test\n -- hello"),
             vec!["cargo tarpaulin".to_string()]
         );
+    }
+
+    /// Toolchain selection precedes Cargo options while target selection is passed to Tarpaulin.
+    #[test]
+    fn command_uses_configured_toolchain_and_target() {
+        let context = Context {
+            toolchain: "+nightly".to_string(),
+            target: Some("x86_64-unknown-linux-musl".to_string()),
+            args: vec!["--all-features".to_string()],
+            ..Context::default()
+        };
+        let spec = CrateSpec {
+            repository_url: Url::parse("https://example.com/owner/repo")
+                .expect("repository URL should be valid"),
+            args: vec!["--release".to_string()],
+            env: HashMap::new(),
+            setup: None,
+            teardown: None,
+        };
+        let mut command = Command::new("cargo");
+
+        init_command(".", Some(&4), &context, &spec, &mut command);
+
+        let args = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            vec![
+                "+nightly",
+                "--jobs",
+                "4",
+                "tarpaulin",
+                "--debug",
+                "--color",
+                "never",
+                "--target",
+                "x86_64-unknown-linux-musl",
+                "--all-features",
+                "--release",
+            ]
+        );
+    }
+
+    /// Shell quoting is removed without splitting a quoted test argument.
+    #[test]
+    fn inferred_command_preserves_quoted_arguments() {
+        let mut command = Command::new("cargo");
+
+        assert!(try_to_populate_command(
+            "cargo test -- --skip \"test with spaces\" && echo done",
+            &mut command
+        )
+        .expect("command should have valid shell quoting"));
+
+        let args = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(args, vec!["--", "--skip", "test with spaces"]);
     }
 }

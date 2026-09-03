@@ -178,7 +178,49 @@ impl<'a> Drop for ProjectCleanupGuard<'a> {
 
 impl CrateSpec {
     pub fn name(&self) -> Option<&str> {
-        self.repository_url.path().split('/').next_back()
+        self.repository_url
+            .path_segments()?
+            .filter(|segment| !segment.is_empty())
+            .next_back()
+    }
+
+    pub fn project_id(&self) -> String {
+        let mut readable = self
+            .repository_url
+            .host_str()
+            .into_iter()
+            .chain(
+                self.repository_url
+                    .path_segments()
+                    .into_iter()
+                    .flatten()
+                    .filter(|segment| !segment.is_empty()),
+            )
+            .flat_map(|part| part.chars().chain(std::iter::once('-')))
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .take(96)
+            .collect::<String>();
+        readable.truncate(readable.trim_end_matches('-').len());
+
+        // FNV-1a keeps IDs stable across program and Rust releases, unlike DefaultHasher.
+        let hash = self
+            .repository_url
+            .as_str()
+            .bytes()
+            .fold(0xcbf29ce484222325_u64, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+            });
+        if readable.is_empty() {
+            format!("repository-{:016x}", hash)
+        } else {
+            format!("{}-{:016x}", readable, hash)
+        }
     }
 }
 
@@ -223,17 +265,18 @@ pub fn run_test(
     projects: &Path,
     results: &Path,
 ) -> Result<(), RunError> {
-    let proj_name = proj.name().unwrap_or_else(|| "unnamed_project");
-    let proj_dir = projects.join(proj_name);
+    let proj_name = proj.name().unwrap_or("unnamed_project");
+    let project_id = proj.project_id();
+    let proj_dir = projects.join(&project_id);
     info!("{}. {}/{}", proj_name, i + 1, context.crates.len());
     if proj_dir.join(".git").exists() {
         warn!("Project already cloned, using existing version");
     } else {
-        clone_project(&projects, proj.repository_url.as_str(), proj_name)
+        clone_project(&projects, proj.repository_url.as_str(), &project_id)
             .map_err(|e| RunError::Git(e))?
     }
 
-    let proj_res = results.join(proj_name);
+    let proj_res = results.join(&project_id);
     create_dir_all(&proj_res).map_err(RunError::Output)?;
     let _guard = ProjectCleanupGuard(&proj_dir);
 
@@ -372,5 +415,28 @@ mod tests {
             .try_wait()
             .expect("terminated child status should be available")
             .is_some());
+    }
+
+    /// Distinct repository URLs with the same basename receive distinct storage directories.
+    #[test]
+    fn project_id_disambiguates_matching_repository_names() {
+        let first = CrateSpec {
+            repository_url: Url::parse("https://example.com/first/parser")
+                .expect("first repository URL should be valid"),
+            args: Vec::new(),
+            env: HashMap::new(),
+            setup: None,
+            teardown: None,
+        };
+        let second = CrateSpec {
+            repository_url: Url::parse("https://example.com/second/parser")
+                .expect("second repository URL should be valid"),
+            args: Vec::new(),
+            env: HashMap::new(),
+            setup: None,
+            teardown: None,
+        };
+
+        assert_ne!(first.project_id(), second.project_id());
     }
 }

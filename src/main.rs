@@ -1,6 +1,6 @@
 use crate::runner::*;
 use std::env;
-use std::fs::{create_dir, create_dir_all, File, OpenOptions};
+use std::fs::{create_dir, create_dir_all, remove_file, rename, File, OpenOptions};
 use std::io::prelude::*;
 use std::io::{self, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
@@ -98,13 +98,25 @@ fn get_progress(progress_file: &Path) -> std::io::Result<usize> {
     }
 }
 
-fn should_exit(progress_file: &Path, index: usize, rx: &mpsc::Receiver<()>) -> bool {
+fn write_progress(progress_file: &Path, index: usize) -> io::Result<()> {
+    let temporary = progress_file.with_extension("tmp");
+    let mut file = File::create(&temporary)?;
+    file.write_all(index.to_string().as_bytes())?;
+    file.sync_all()?;
+    rename(temporary, progress_file)?;
+    #[cfg(unix)]
+    File::open(
+        progress_file
+            .parent()
+            .expect("progress file must have a parent directory"),
+    )?
+    .sync_all()?;
+    Ok(())
+}
+
+fn should_exit(rx: &mpsc::Receiver<()>) -> bool {
     if rx.try_recv().is_ok() {
         info!("Pausing execution");
-        let progress_msg = "Unable to write progress file do it yourself";
-        let mut f = File::create(&progress_file).expect(progress_msg);
-        f.write_all(index.to_string().as_bytes())
-            .expect(progress_msg);
         true
     } else {
         false
@@ -152,29 +164,30 @@ fn run_tater(
     let mut pass_writer = get_status_linewriter(&pass_file, start_from)?;
     let mut failures = 0;
     for (i, proj) in context.crates.iter().enumerate().skip(start_from) {
-        let proj_name = proj.name().unwrap_or_else(|| "unnamed_project");
+        let project_id = proj.project_id();
         let res = run_test(i, context, proj, jobs.as_ref(), &projects, &results);
         let failed = match res {
             Err(error) => {
                 failures += 1;
-                error!("Tarpaulin failed on {}: {}", proj_name, error);
+                error!("Tarpaulin failed on {}: {}", project_id, error);
                 true
             }
             Ok(()) => {
-                pass_writer.write_all(proj_name.as_bytes())?;
+                pass_writer.write_all(project_id.as_bytes())?;
                 pass_writer.write_all(b"\n")?;
                 pass_writer.flush()?;
                 false
             }
         };
-        let exit_index = if failed { i } else { i + 1 };
+        if failed {
+            fail_writer.write_all(project_id.as_bytes())?;
+            fail_writer.write_all(b"\n")?;
+            fail_writer.flush()?;
+        }
+        // Persist the result before advancing the checkpoint so resume cannot skip an unreported run.
+        write_progress(&progress_file, i + 1)?;
 
-        if should_exit(&progress_file, exit_index, &rx) {
-            if failed {
-                fail_writer.write_all(proj_name.as_bytes())?;
-                fail_writer.write_all(b"\n")?;
-                fail_writer.flush()?;
-            }
+        if should_exit(&rx) {
             if failures > 0 {
                 return Err(format!(
                     "Tarpaulin failed on {}/{} processed projects before pausing",
@@ -184,11 +197,20 @@ fn run_tater(
                 .into());
             }
             return Ok(());
-        } else if failed {
-            fail_writer.write_all(proj_name.as_bytes())?;
-            fail_writer.write_all(b"\n")?;
-            fail_writer.flush()?;
         }
+    }
+    match remove_file(&progress_file) {
+        Ok(()) => {
+            #[cfg(unix)]
+            File::open(
+                progress_file
+                    .parent()
+                    .expect("progress file must have a parent directory"),
+            )?
+            .sync_all()?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
     if failures > 0 {
         error!(
@@ -204,4 +226,45 @@ fn run_tater(
         .into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A completed run removes its checkpoint so the next invocation starts from the beginning.
+    #[test]
+    fn completed_run_clears_progress() {
+        let output =
+            std::env::temp_dir().join(format!("tater-progress-test-{}", std::process::id()));
+        create_dir_all(&output).expect("test output directory should be created");
+        let progress = output.join("progress");
+        write_progress(&progress, 42).expect("initial progress should be written");
+        let (_sender, receiver) = mpsc::channel();
+
+        run_tater(&Context::default(), &output, None, receiver)
+            .expect("empty crater run should complete");
+
+        assert!(!progress.exists());
+        std::fs::remove_dir_all(&output).expect("test output directory should be removed");
+    }
+
+    /// Replacing a checkpoint leaves one complete value and no temporary file behind.
+    #[test]
+    fn progress_updates_atomically() {
+        let output =
+            std::env::temp_dir().join(format!("tater-progress-update-test-{}", std::process::id()));
+        create_dir_all(&output).expect("test output directory should be created");
+        let progress = output.join("progress");
+
+        write_progress(&progress, 1).expect("first progress value should be written");
+        write_progress(&progress, 27).expect("replacement progress value should be written");
+
+        assert_eq!(
+            get_progress(&progress).expect("progress should be valid"),
+            27
+        );
+        assert!(!progress.with_extension("tmp").exists());
+        std::fs::remove_dir_all(&output).expect("test output directory should be removed");
+    }
 }

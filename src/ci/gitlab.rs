@@ -46,7 +46,7 @@ pub fn get_command(
         for (k, stage) in &workflow.stages {
             info!("Scanning stage: {:?}", k);
             for line in &stage.script {
-                if try_to_populate_command(line.as_str(), &mut cmd) {
+                if try_to_populate_command(line.as_str(), &mut cmd)? {
                     return cmd.spawn();
                 }
             }

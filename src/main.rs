@@ -119,11 +119,14 @@ fn collected_arguments(arguments: &[String]) -> Vec<String> {
         if argument == "--coveralls" || argument == "--color" {
             index += 1;
             if index < arguments.len() && !arguments[index].starts_with('-') {
-                index += 1;
-                while index < arguments.len() && arguments[index] != "}}" {
+                if arguments[index].contains("${{") {
+                    while index < arguments.len() && arguments[index] != "}}" {
+                        index += 1;
+                    }
+                    index += usize::from(index < arguments.len());
+                } else {
                     index += 1;
                 }
-                index += usize::from(index < arguments.len());
             }
             continue;
         }
@@ -648,14 +651,14 @@ mod tests {
     #[test]
     fn collected_input_is_ready_to_execute() {
         let input = serde_json::from_str::<RepositoriesInput>(
-            r#"[{"url":"https://github.com/example/project","command":["cargo","+nightly","tarpaulin","--features","full","--target","${{","matrix.target","}}","--coveralls","${{","secrets.TOKEN","}}"],"command_file":"https://raw.githubusercontent.com/example/project/revision/.github/workflows/ci.yml"}]"#,
+            r#"[{"url":"https://github.com/example/project","command":["cargo","+nightly","tarpaulin","--features","full","--target","${{","matrix.target","}}","--coveralls","${{","secrets.TOKEN","}}","--release"],"command_file":"https://raw.githubusercontent.com/example/project/revision/.github/workflows/ci.yml"}]"#,
         )
         .expect("collector JSON should parse");
         let context = input.into_context().expect("collector JSON should convert");
         let project = &context.crates[0];
 
         assert_eq!(project.toolchain.as_deref(), Some("+nightly"));
-        assert_eq!(project.args, vec!["--features", "full"]);
+        assert_eq!(project.args, vec!["--features", "full", "--release"]);
         assert!(project.ci.is_some());
     }
 

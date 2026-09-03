@@ -13,13 +13,9 @@ pub fn unsupported_reason(root: &Path, spec: &CrateSpec) -> Option<String> {
     }
 
     let workflow = workflow_path(root, &invocation.command_file)?;
-    let document: Value = match File::open(&workflow)
+    let document: Value = File::open(&workflow)
         .ok()
-        .and_then(|file| serde_yaml::from_reader(file).ok())
-    {
-        Some(document) => document,
-        None => return None,
-    };
+        .and_then(|file| serde_yaml::from_reader(file).ok())?;
     let jobs = document
         .as_mapping()?
         .get(&Value::String("jobs".to_string()))?

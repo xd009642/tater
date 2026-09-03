@@ -83,11 +83,11 @@ pub fn init_command(
     {
         cmd.arg(toolchain);
     }
+    cmd.args(&default_args());
     if let Some(j) = jobs {
         cmd.args(&["--jobs", j.to_string().as_str()]);
     }
-    cmd.args(&default_args())
-        .env("RUST_LOG", "cargo_tarpaulin=info")
+    cmd.env("RUST_LOG", "cargo_tarpaulin=info")
         .args(
             context
                 .target
@@ -202,12 +202,12 @@ mod test {
             args,
             vec![
                 "+nightly",
-                "--jobs",
-                "4",
                 "tarpaulin",
                 "--debug",
                 "--color",
                 "never",
+                "--jobs",
+                "4",
                 "--target",
                 "x86_64-unknown-linux-musl",
                 "--all-features",

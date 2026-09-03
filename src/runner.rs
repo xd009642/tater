@@ -430,7 +430,17 @@ pub fn run_test(
     let proj_name = proj.name().unwrap_or("unnamed_project");
     let project_id = proj.project_id();
     let proj_dir = projects.join(&project_id);
+    let proj_res = results.join(&project_id);
     info!("{}. {}/{}", proj_name, i + 1, context.crates.len());
+    create_dir_all(&proj_res).map_err(RunError::Output)?;
+    if let Some(reason) = ci::compatibility::unsupported_reason(&proj_dir, proj) {
+        info!("Skipping {}: {}", proj_name, reason);
+        if proj_dir.exists() {
+            clean_project_checkout(&proj_dir, &proj_res.join("checkout.zip"), false)
+                .map_err(RunError::Cleanup)?;
+        }
+        return Ok(RunOutcome::Skipped(reason));
+    }
     if proj_dir.join(".git").exists() {
         warn!("Project already cloned, using existing version");
     } else {
@@ -438,8 +448,6 @@ pub fn run_test(
             .map_err(|e| RunError::Git(e))?
     }
 
-    let proj_res = results.join(&project_id);
-    create_dir_all(&proj_res).map_err(RunError::Output)?;
     let _guard = ProjectCleanupGuard(&proj_dir);
     if let Some(reason) = ci::compatibility::unsupported_reason(&proj_dir, proj) {
         info!("Skipping {}: {}", proj_name, reason);

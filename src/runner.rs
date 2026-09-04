@@ -224,12 +224,19 @@ fn belongs_to_process_tree(system: &System, mut pid: Pid, root: Pid) -> bool {
 }
 
 #[cfg(unix)]
-fn kill_process_tree(child: &mut Child) -> io::Result<()> {
+fn kill_process_group(process_group: u32) -> io::Result<()> {
     use nix::sys::signal::{killpg, Signal};
     use nix::unistd::Pid as NixPid;
 
-    let kill_result =
-        killpg(NixPid::from_raw(child.id() as i32), Signal::SIGKILL).map_err(io::Error::other);
+    match killpg(NixPid::from_raw(process_group as i32), Signal::SIGKILL) {
+        Ok(()) | Err(nix::Error::Sys(nix::errno::Errno::ESRCH)) => Ok(()),
+        Err(error) => Err(io::Error::other(error)),
+    }
+}
+
+#[cfg(unix)]
+fn kill_process_tree(child: &mut Child) -> io::Result<()> {
+    let kill_result = kill_process_group(child.id());
     let wait_result = child.wait().map(|_| ());
     kill_result.and(wait_result)
 }
@@ -484,6 +491,7 @@ pub fn run_test(
                 File::create(proj_res.join("stderr.log")).map_err(RunError::Output)?;
             match ci::spawn_tarpaulin(&proj_dir, options.jobs.as_ref(), context, proj) {
                 Ok(mut tarp) => {
+                    let process_group = tarp.id();
                     let stdout = tarp
                         .stdout
                         .take()
@@ -496,12 +504,29 @@ pub fn run_test(
                     let stderr_reading = thread::spawn(move || stream_output(stderr, stderr_file));
 
                     let wait_result = wait_for_tarpaulin(&mut tarp, output, options.disk_budget);
+                    // Tarpaulin can exit after timing out while leaving its test process alive. The
+                    // descendant retains these pipes, so terminate the dedicated process group
+                    // before joining the output threads.
+                    #[cfg(unix)]
+                    let lingering_cleanup = kill_process_group(process_group);
+                    #[cfg(not(unix))]
+                    let lingering_cleanup = Ok(());
                     let stdout_result =
                         stdout_reading.join().map_err(|_| RunError::OutputThread)?;
                     let stderr_result =
                         stderr_reading.join().map_err(|_| RunError::OutputThread)?;
                     stdout_result.map_err(RunError::Output)?;
                     stderr_result.map_err(RunError::Output)?;
+
+                    if let Err(error) = lingering_cleanup {
+                        if wait_result.is_ok() {
+                            return Err(RunError::Tarpaulin(format!(
+                                "Failed to terminate lingering test processes: {}",
+                                error
+                            )));
+                        }
+                        error!("Lingering process cleanup also failed: {}", error);
+                    }
 
                     wait_result.and_then(|status| {
                         if status.success() {
@@ -629,6 +654,32 @@ mod tests {
             .try_wait()
             .expect("terminated child status should be available")
             .is_some());
+    }
+
+    /// Descendants which outlive their launcher are killed so inherited output pipes can close.
+    #[cfg(unix)]
+    #[test]
+    fn lingering_process_group_is_killed_after_leader_exits() {
+        let mut command = Command::new("sh");
+        command
+            .args(&["-c", "trap '' HUP; sleep 30 &"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        command.process_group(0);
+        let mut child = command.spawn().expect("test process should start");
+        let process_group = child.id();
+        let output = child.stdout.take().expect("stdout should be piped");
+        let reading = thread::spawn(move || {
+            let mut output = output;
+            let mut contents = Vec::new();
+            output
+                .read_to_end(&mut contents)
+                .expect("output pipe should close");
+        });
+
+        child.wait().expect("process-group leader should exit");
+        kill_process_group(process_group).expect("lingering process group should be terminated");
+        reading.join().expect("output reader should finish");
     }
 
     /// Distinct repository URLs with the same basename receive distinct storage directories.
